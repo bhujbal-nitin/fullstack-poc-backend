@@ -5,10 +5,12 @@ import jwt from "jsonwebtoken";
 import pkg from "pg";
 import bcrypt from "bcryptjs";
 import dotenv from "dotenv";
+import unirest from 'unirest';
 
 dotenv.config();
 
 const { Pool } = pkg;
+
 
 const app = express();
 const PORT = process.env.PORT || 5050;
@@ -17,7 +19,7 @@ const JWT_SECRET = process.env.JWT_SECRET || "supersecretkey";
 // Middleware
 app.use(cors({
   // origin: "http://mspeventwin1.westus.cloudapp.azure.com" ,// frontend
-  origin: ["http://localhost:5173", "http://10.41.11.103:5173"],
+  origin: ["http://localhost:5173", "http://10.41.11.103:5173","http://localhost:80","http://localhost"],
   credentials: true
 }));
 app.use(express.json());
@@ -51,6 +53,94 @@ const authenticateToken = (req, res, next) => {
     next();
   });
 };
+
+
+
+// Add this to your server.js
+app.get("/poc/api/auth/validate", authenticateToken, (req, res) => {
+    res.json({ 
+        valid: true, 
+        user: req.user 
+    });
+});
+
+
+
+
+
+
+
+// Get distinct status types
+app.get('/poc/getStatusTypes', authenticateToken, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT DISTINCT status
+      FROM public.poc_prj_details
+      WHERE status IS NOT NULL
+      ORDER BY status
+    `);
+    const statusTypes = result.rows.map(row => row.status);
+    res.json(statusTypes);
+  } catch (error) {
+    console.error('Error fetching status types:', error);
+    res.status(500).json({ error: 'Failed to fetch status types' });
+  }
+});
+
+
+
+// Get distinct poc types 
+app.get("/poc/getPocTypes", authenticateToken, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT DISTINCT regexp_replace(poc_prj_id, '[-_].*$', '') AS type
+      FROM public.poc_prj_details
+      WHERE poc_prj_id IS NOT NULL
+    `);
+ 
+    const types = result.rows.map(row => row.type).filter(type => type);
+    res.json(types);
+  } catch (err) {
+    console.error("Error fetching POC types:", err);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+
+
+
+// Get reports data
+app.get("/poc/getReports", authenticateToken, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT
+        poc_prj_id as id,
+        sales_person as "salesPerson",
+        region,
+        poc_type,
+        start_date,
+        excepted_end_date,
+        client_name as "companyName",
+        description as usecase,
+        status
+      FROM public.poc_prj_details
+      ORDER BY start_date DESC
+    `);
+ 
+    res.json(result.rows);
+  } catch (err) {
+    console.error("Error fetching reports:", err);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+ 
+
+
+
+
+
+
+
 
 // ✅ Login API using emp_details table
 app.post("/poc/api/auth/login", async (req, res) => {
@@ -161,12 +251,11 @@ app.get("/poc/all", authenticateToken, async (req, res) => {
 
     res.json(result.rows);
   } catch (err) {
-    console.error("Error fetching POCs:", err);
+    console.error("Error fetching Usecases:", err);
     res.status(500).json({ message: "Internal server error" });
   }
 });
 
-// Get single POC by ID - FIXED with type casting
 
 
 // Create new POC
@@ -178,7 +267,7 @@ app.post("/poc/create", authenticateToken, async (req, res) => {
       tags, assignedTo, createdBy, remark, actualStartDate, actualEndDate,
       estimatedEfforts, approvedBy, totalEfforts, varianceDays
     } = req.body;
-
+    console.log(req.body)
     // Start transaction
     await pool.query('BEGIN');
 
@@ -240,45 +329,50 @@ app.post("/poc/create", authenticateToken, async (req, res) => {
   }
 });
 
-// Update POC - FIXED with type casting
+
+
+// Update POC - FIXED with type casting and Yes/No conversion for isBillable only
 app.put("/poc/update/:id", authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
-    const {
+    let {
       pocName, entityName, entityType, salesPerson, region, isBillable,
       status, startDate, endDate, pocType, description, spocEmail, spocDesignation,
       tags, assignedTo, remark, actualStartDate, actualEndDate,
       estimatedEfforts, approvedBy, totalEfforts, varianceDays
     } = req.body;
 
+    // 🔹 Convert boolean → Yes/No for isBillable
+    const billableValue = isBillable === true ? "Yes" : "No";
+
     // Start transaction
     await pool.query("BEGIN");
 
     // 🔹 Update main details
     const pocDetailsQuery = `
-        UPDATE poc_prj_details SET
-          poc_prj_name = $1,
-          client_name = $2,
-          partner_client_own = $3,
-          sales_person = $4,
-          region = $5,
-          is_billable = $6,
-          status = $7,
-          start_date = $8,
-          excepted_end_date = $9,
-          poc_type = $10,
-          description = $11,
-          spoc_email_address = $12,
-          spoc_designation = $13,
-          tag = $14,
-          assigned_to = $15,
-          remarks = $16
-        WHERE poc_prj_id::text = $17
-        RETURNING *
-      `;
+      UPDATE poc_prj_details SET
+        poc_prj_name = $1,
+        client_name = $2,
+        partner_client_own = $3,
+        sales_person = $4,
+        region = $5,
+        is_billable = $6,
+        status = $7,
+        start_date = $8,
+        excepted_end_date = $9,
+        poc_type = $10,
+        description = $11,
+        spoc_email_address = $12,
+        spoc_designation = $13,
+        tag = $14,
+        assigned_to = $15,
+        remarks = $16
+      WHERE poc_prj_id::text = $17
+      RETURNING *
+    `;
 
     const pocDetailsValues = [
-      pocName, entityName, entityType, salesPerson, region, isBillable,
+      pocName, entityName, entityType, salesPerson, region, billableValue, // ✅ Yes/No saved
       status, startDate, endDate, pocType, description, spocEmail, spocDesignation,
       tags, assignedTo, remark, id
     ];
@@ -292,16 +386,16 @@ app.put("/poc/update/:id", authenticateToken, async (req, res) => {
 
     // 🔹 Update efforts table (always update, if no row → insert)
     const effortsUpdateQuery = `
-        UPDATE poc_prj_efforts SET
-          actual_start_date = $1,
-          actual_end_date = $2,
-          estimated_efforts = $3,
-          approved_by = $4,
-          total_efforts = $5,
-          variance_days = $6
-        WHERE poc_prj_id::text = $7
-        RETURNING *
-      `;
+      UPDATE poc_prj_efforts SET
+        actual_start_date = $1,
+        actual_end_date = $2,
+        estimated_efforts = $3,
+        approved_by = $4,
+        total_efforts = $5,
+        variance_days = $6
+      WHERE poc_prj_id::text = $7
+      RETURNING *
+    `;
 
     const effortsValues = [
       actualStartDate, actualEndDate, estimatedEfforts,
@@ -313,12 +407,12 @@ app.put("/poc/update/:id", authenticateToken, async (req, res) => {
     // If no row exists → insert instead
     if (effortsResult.rows.length === 0) {
       const effortsInsertQuery = `
-          INSERT INTO poc_prj_efforts (
-            poc_prj_id, actual_start_date, actual_end_date, estimated_efforts,
-            approved_by, total_efforts, variance_days
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7)
-          RETURNING *
-        `;
+        INSERT INTO poc_prj_efforts (
+          poc_prj_id, actual_start_date, actual_end_date, estimated_efforts,
+          approved_by, total_efforts, variance_days
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+        RETURNING *
+      `;
 
       await pool.query(effortsInsertQuery, [
         id, actualStartDate, actualEndDate,
@@ -340,6 +434,9 @@ app.put("/poc/update/:id", authenticateToken, async (req, res) => {
   }
 });
 
+
+
+// Get all assignTo (employees) - FIXED
 app.get("/poc/getAllAssignTo", authenticateToken, async (req, res) => {
   try {
     const result = await pool.query(`
@@ -514,6 +611,9 @@ async function generateNextPocId(prefix) {
 
   return `${prefix}-${String(nextNumber).padStart(2, "0")}`;
 }
+
+
+// Save POC with AutomationEdge integration
 app.post("/poc/savepocprjid", authenticateToken, async (req, res) => {
   const client = await pool.connect();
   try {
@@ -538,7 +638,9 @@ app.post("/poc/savepocprjid", authenticateToken, async (req, res) => {
       createdBy
     } = req.body;
 
+    console.log(req.body);
     await client.query("BEGIN");
+    const billableValue = isBillable === true ? "Yes" : "No";
 
     // 🔹 Generate poc_prj_id
     const pocPrjId = await generateNextPocId(pocId);
@@ -546,24 +648,10 @@ app.post("/poc/savepocprjid", authenticateToken, async (req, res) => {
     // 🔹 Insert into poc_prj_details
     const insertDetailsQuery = `
       INSERT INTO public.poc_prj_details (
-        poc_prj_id,
-        poc_prj_name,
-        client_name,
-        partner_client_own,
-        sales_person,
-        description,
-        assigned_to,
-        start_date,
-        excepted_end_date,
-        remarks,
-        created_by,
-        region,
-        poc_type,
-        is_billable,
-        tag,
-        spoc_email_address,
-        spoc_designation,
-        department_name
+        poc_prj_id, poc_prj_name, client_name, partner_client_own,
+        sales_person, description, assigned_to, start_date,
+        excepted_end_date, remarks, created_by, region, poc_type,
+        is_billable, tag, spoc_email_address, spoc_designation, department_name
       )
       VALUES (
         $1,$2,$3,$4,$5,$6,$7,$8,$9,
@@ -575,8 +663,8 @@ app.post("/poc/savepocprjid", authenticateToken, async (req, res) => {
     const detailsResult = await client.query(insertDetailsQuery, [
       pocPrjId,
       pocName,
-      entityName,       // company name → client_name
-      entityType,       // client type → partner_client_own
+      entityName,
+      entityType,
       salesPerson,
       description,
       assignedTo,
@@ -586,30 +674,90 @@ app.post("/poc/savepocprjid", authenticateToken, async (req, res) => {
       createdBy,
       region,
       pocType,
-      isBillable,
+      billableValue,
       tags,
       spocEmail,
       spocDesignation,
-      entityType        // optional department_name mapping
+      entityType
     ]);
 
-    // 🔹 Insert into poc_prj_efforts (link by poc_prj_id)
+    // 🔹 Insert into poc_prj_efforts
     const insertEffortsQuery = `
-      INSERT INTO public.poc_prj_efforts (
-        poc_prj_id,
-        partner_name
-      )
+      INSERT INTO public.poc_prj_efforts (poc_prj_id, partner_name)
       VALUES ($1, $2)
       RETURNING *;
     `;
-
-    const effortsResult = await client.query(insertEffortsQuery, [
-      pocPrjId,
-      partnerName
-    ]);
+    const effortsResult = await client.query(insertEffortsQuery, [pocPrjId, partnerName]);
 
     await client.query("COMMIT");
 
+    // ✅ Now trigger AutomationEdge workflow
+    try {
+      // Authenticate
+      const sessionToken = await new Promise((resolve, reject) => {
+        unirest
+          .post("https://T4.automationedge.com/aeengine/rest/authenticate")
+          .query({ username: "Msp", password: "Msp@12345" })
+          .end((response) => {
+            if (response.error) reject("Authentication failed");
+            else resolve(response.body.sessionToken);
+          });
+      });
+
+      // Build request body for workflow
+      const requestBody = {
+        orgCode: "MSP_EVENT",
+        workflowName: "POC_BOT-Add_New_POC_PRJ_ID",
+        userId: "MSP Event",
+        source: "Rest Test",
+        responseMailSubject: 'null',
+        params: [
+          { name: 'poc_prj_id', type: 'String', value: pocPrjId },
+          { name: 'poc_prj_name', type: 'String', value: pocName },
+          { name: 'partner_client_own', type: 'String', value: entityType },
+          { name: 'client_name', type: 'String', value: entityName },
+          { name: 'sales_person', type: 'String', value: salesPerson },
+          { name: 'description', type: 'String', value: description },
+          { name: 'assigned_to', type: 'String', value: assignedTo },
+          { name: 'start_date', type: 'Date', value: startDate },
+          { name: 'excepted_end_date', type: 'Date', value: endDate },
+          { name: 'remarks', type: 'String', value: remark || '' },
+          { name: 'created_by', type: 'String', value: createdBy },
+          { name: 'region', type: 'String', value: region },
+          { name: 'is_billable', type: 'String', value: billableValue },
+          { name: 'poc_type', type: 'String', value: pocType },
+          { name: 'tag', type: 'String', value: tags },
+
+          { name: 'chatBotEndPoint', type: 'String', value: null },
+          { name: 'additionalInfo', type: 'String', value: null },
+          { name: 'spoc_email_address', type: 'String', value: spocEmail },
+          { name: 'spoc_designation', type: 'String', value: spocDesignation },
+          { name: 'user_email', type: 'String', value: spocEmail }
+        ]
+
+      };
+      console.log(requestBody);
+      console.log(sessionToken);      // Execute workflow
+      const automationRequestId = await new Promise((resolve, reject) => {
+        unirest
+          .post("https://T4.automationedge.com/aeengine/rest/execute")
+          .headers({
+            "Content-Type": "application/json",
+            "X-Session-Token": sessionToken
+          })
+          .send(requestBody)
+          .end((response) => {
+            if (response.error) reject("Workflow execution failed");
+            else resolve(response.body.automationRequestId);
+          });
+      });
+
+      console.log("Workflow executed successfully:", automationRequestId);
+    } catch (aeError) {
+      console.error("Error during AutomationEdge workflow execution:", aeError);
+    }
+
+    // Final API response
     res.status(201).json({
       message: "POC saved successfully",
       details: detailsResult.rows[0],
@@ -687,7 +835,7 @@ app.put("/poc/updateStatus/:id", authenticateToken, async (req, res) => {
     }
 
     // Validate status value
-    const validStatuses = ['Pending', 'In Progress', 'Completed', 'Cancelled', 'Draft', 'Awaiting', 'Hold', 'Closed', 'Converted' ];
+    const validStatuses = ['Pending', 'In Progress', 'Completed', 'Cancelled', 'Draft', 'Awaiting', 'Hold', 'Closed', 'Converted'];
     if (!validStatuses.includes(status)) {
       return res.status(400).json({
         message: "Invalid status value",
@@ -725,6 +873,51 @@ app.put("/poc/updateStatus/:id", authenticateToken, async (req, res) => {
   }
 });
 
+
+
+// Update remark endpoint
+app.put('/poc/updateRemark/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { remark } = req.body;
+
+    // Simple update without updated_at column
+    const updateQuery = `
+            UPDATE poc_prj_details 
+            SET remarks = $1
+            WHERE poc_prj_id::text = $2
+            RETURNING poc_prj_id, poc_prj_name, remarks
+        `;
+
+    const result = await pool.query(updateQuery, [remark, id]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: "POC not found with ID: " + id });
+    }
+
+    res.json({
+      success: true,
+      message: "Remark updated successfully",
+      data: result.rows[0]
+    });
+
+  } catch (err) {
+    console.error("Error updating POC remark:", err);
+    res.status(500).json({
+      success: false,
+      message: "Internal server error",
+      error: err.message
+    });
+  }
+});
+
+
+
+
+
+
+
+ 
 
 
 // Change this line at the end of server.js
