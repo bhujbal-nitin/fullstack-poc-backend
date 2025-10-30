@@ -116,83 +116,8 @@ app.get("/poc/api/auth/validate", authenticateToken, (req, res) => {
 
 
 
-// app.get("/poc/getAllPocs", authenticateToken, async (req, res) => {
-//   const client = await pool.connect();
-//   try {
-//     console.log('Fetching all POC records...');
 
-//     // Use only the columns that exist based on your SELECT query
-//     const query = `
-//       SELECT 
-//         id, 
-//         brief, 
-//         company_name, 
-//         designation, 
-//         end_customer_type, 
-//         sp_name as sales_person,
-//         spoc, 
-//         spoc_email, 
-//         usecase, 
-//         partner_company_name, 
-//         partner_spoc, 
-//         partner_spoc_email, 
-//         partner_designation, 
-//         partner_mobile_number, 
-//         mobile_number, 
-//         process_type, 
-//         region,
-//         generated_usecase,
-//         remark,
-//         status
-
-//       FROM public.poc_details 
-//       ORDER BY id DESC
-//     `;
-
-//     const result = await client.query(query);
-//     console.log('POC records found:', result.rows.length);
-
-//     // Transform the data to match frontend expectations
-//     const pocData = result.rows.map(row => ({
-//       id: row.id,
-//       brief: row.brief,
-//       companyName: row.company_name,
-//       designation: row.designation,
-//       endCustomerType: row.end_customer_type,
-//       salesPerson: row.sales_person,
-//       spoc: row.spoc,
-//       spocEmail: row.spoc_email,
-//       usecase: row.usecase,
-//       partnerCompanyName: row.partner_company_name,
-//       partnerSpoc: row.partner_spoc,
-//       partnerSpocEmail: row.partner_spoc_email,
-//       partnerDesignation: row.partner_designation,
-//       partnerMobileNumber: row.partner_mobile_number,
-//       mobileNumber: row.mobile_number,
-//       processType: row.process_type,
-//       region: row.region,
-//       generatedUsecase: row.generated_usecase,
-//       remark: row.remark,
-//       status: row.status
-//     }));
-
-//     res.json(pocData);
-//   } catch (err) {
-//     console.error("Error fetching POC records:", err);
-//     res.status(500).json({
-//       message: "Internal server error",
-//       error: err.message
-//     });
-//   } finally {
-//     client.release();
-//   }
-// });
-
-
-
-
-// API to update generated_usecase in poc_details table
-
+// Get all POCs - FIXED with type casting
 app.get("/poc/getAllPocs", authenticateToken, async (req, res) => {
   const client = await pool.connect();
   try {
@@ -304,31 +229,42 @@ app.get("/poc/getAllPocs", authenticateToken, async (req, res) => {
     client.release();
   }
 });
-app.put("/poc/updateGeneratedUsecase/:id", authenticateToken, async (req, res) => {
+
+app.put("/poc/updateInitiatedStatus/:id", authenticateToken, async (req, res) => {
   const client = await pool.connect();
   try {
     const { id } = req.params;
-    const { generatedUsecase } = req.body;
+    const { status } = req.body;
+
+    // Validate status
+    const validStatuses = ['Draft', 'Initiated', 'Pending', 'In Progress', 'Completed'];
+    if (!validStatuses.includes(status)) {
+      return res.status(400).json({
+        message: "Invalid status value"
+      });
+    }
 
     const query = `
       UPDATE public.poc_details 
-      SET generated_usecase = $1 
-      WHERE id = $2 
-      RETURNING *;
+      SET status = $1
+      WHERE id = $2
+      RETURNING id, status
     `;
 
-    const result = await client.query(query, [generatedUsecase, id]);
+    const result = await client.query(query, [status, id]);
 
     if (result.rows.length === 0) {
-      return res.status(404).json({ message: "POC record not found" });
+      return res.status(404).json({
+        message: "POC record not found"
+      });
     }
 
     res.json({
-      message: "Generated usecase updated successfully",
+      message: "Status updated successfully",
       poc: result.rows[0]
     });
   } catch (err) {
-    console.error("Error updating generated usecase:", err);
+    console.error("Error updating status:", err);
     res.status(500).json({
       message: "Internal server error",
       error: err.message
@@ -338,25 +274,91 @@ app.put("/poc/updateGeneratedUsecase/:id", authenticateToken, async (req, res) =
   }
 });
 
+// app.put("/poc/updateGeneratedUsecase/:id", authenticateToken, async (req, res) => {
+//   const client = await pool.connect();
+//   try {
+//     const { id } = req.params;
+//     const { generatedUsecase } = req.body;
+
+//     const query = `
+//       UPDATE public.poc_details 
+//       SET generated_usecase = $1 
+//       WHERE id = $2 
+//       RETURNING *;
+//     `;
+
+//     const result = await client.query(query, [generatedUsecase, id]);
+
+//     if (result.rows.length === 0) {
+//       return res.status(404).json({ message: "POC record not found" });
+//     }
+
+//     res.json({
+//       message: "Generated usecase updated successfully",
+//       poc: result.rows[0]
+//     });
+//   } catch (err) {
+//     console.error("Error updating generated usecase:", err);
+//     res.status(500).json({
+//       message: "Internal server error",
+//       error: err.message
+//     });
+//   } finally {
+//     client.release();
+//   }
+// });
+
 // API to delete POC record
-app.delete("/poc/deletePoc/:id", authenticateToken, async (req, res) => {
+
+
+
+app.delete("/poc/deleteInitiatedPoc/:id", authenticateToken, async (req, res) => {
   const client = await pool.connect();
   try {
     const { id } = req.params;
 
     console.log('Deleting POC record with ID:', id);
 
-    const query = `
+    await client.query("BEGIN");
+
+    // Use user_permissions table instead of users
+    const checkQuery = `
+      SELECT pd.*, up.sales_admin 
+      FROM public.poc_details pd 
+      LEFT JOIN public.user_permissions up ON up.emp_id = $2
+      WHERE pd.id = $1
+    `;
+    const checkResult = await client.query(checkQuery, [id, req.user.emp_id]);
+
+    if (checkResult.rows.length === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ message: "POC record not found" });
+    }
+
+    const currentPoc = checkResult.rows[0];
+    const isSalesAdmin = checkResult.rows[0].sales_admin === true;
+
+    console.log(`User is sales_admin: ${isSalesAdmin}, Current status: ${currentPoc.status}`);
+
+    // Status validation: Only allow deletion if status is "Draft" OR user is sales_admin
+    if (!isSalesAdmin && currentPoc.status !== 'Draft') {
+      await client.query("ROLLBACK");
+      return res.status(403).json({
+        message: `Cannot delete record with "${currentPoc.status}" status. Only "Draft" records can be deleted.`,
+        currentStatus: currentPoc.status,
+        redirect: true
+      });
+    }
+
+    const deleteQuery = `
       DELETE FROM public.poc_details 
       WHERE id = $1 
       RETURNING *;
     `;
 
-    const result = await client.query(query, [id]);
+    const result = await client.query(deleteQuery, [id]);
 
-    if (result.rows.length === 0) {
-      return res.status(404).json({ message: "POC record not found" });
-    }
+    await client.query("COMMIT");
 
     res.json({
       message: "POC record deleted successfully",
@@ -364,6 +366,7 @@ app.delete("/poc/deletePoc/:id", authenticateToken, async (req, res) => {
     });
 
   } catch (err) {
+    await client.query("ROLLBACK");
     console.error("Error deleting POC record:", err);
     res.status(500).json({
       message: "Internal server error",
@@ -374,7 +377,6 @@ app.delete("/poc/deletePoc/:id", authenticateToken, async (req, res) => {
   }
 });
 
-// PUT endpoint to update POC details (without updated_at)
 app.put("/poc/updateInitiatedPoc", authenticateToken, async (req, res) => {
   console.log("✅ PUT /poc/updateInitiatedPoc endpoint hit");
   console.log("Request body:", req.body);
@@ -409,13 +411,33 @@ app.put("/poc/updateInitiatedPoc", authenticateToken, async (req, res) => {
   try {
     await client.query("BEGIN");
 
-    // First, check if the POC exists
-    const checkQuery = 'SELECT * FROM public.poc_details WHERE id = $1';
-    const checkResult = await client.query(checkQuery, [id]);
+    // Use user_permissions table to check sales_admin permission
+    const checkQuery = `
+      SELECT pd.*, up.sales_admin 
+      FROM public.poc_details pd 
+      LEFT JOIN public.user_permissions up ON up.emp_id = $2
+      WHERE pd.id = $1
+    `;
+    const checkResult = await client.query(checkQuery, [id, req.user.emp_id]);
 
     if (checkResult.rows.length === 0) {
       await client.query("ROLLBACK");
       return res.status(404).json({ message: "POC record not found" });
+    }
+
+    const currentPoc = checkResult.rows[0];
+    const isSalesAdmin = checkResult.rows[0].sales_admin === true;
+
+    console.log(`User is sales_admin: ${isSalesAdmin}, Current status: ${currentPoc.status}`);
+
+    // Status validation: Only allow updates if status is "Draft" OR user is sales_admin
+    if (!isSalesAdmin && currentPoc.status !== 'Draft') {
+      await client.query("ROLLBACK");
+      return res.status(403).json({
+        message: `Cannot update record. Status has been changed to "${currentPoc.status}". Only "Draft" records can be updated.`,
+        currentStatus: currentPoc.status,
+        redirect: true
+      });
     }
 
     const query = `
@@ -484,6 +506,37 @@ app.put("/poc/updateInitiatedPoc", authenticateToken, async (req, res) => {
     });
   } finally {
     client.release();
+  }
+});
+
+// GET endpoint to verify current status of a POC
+app.get("/poc/verifyStatus/:id", authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const query = `
+      SELECT id, status 
+      FROM public.poc_details 
+      WHERE id = $1
+    `;
+
+    const result = await pool.query(query, [id]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: "POC record not found" });
+    }
+
+    res.json({
+      id: result.rows[0].id,
+      status: result.rows[0].status
+    });
+
+  } catch (err) {
+    console.error("Error verifying status:", err);
+    res.status(500).json({
+      message: "Internal server error",
+      error: err.message
+    });
   }
 });
 
@@ -647,6 +700,106 @@ app.get("/poc/getTodayStatus", authenticateToken, async (req, res) => {
     res.json(formattedRows);
   } catch (err) {
     console.error("Error fetching today's status:", err);
+    res.status(500).json({ message: "Internal server error" });
+  } finally {
+    client.release();
+  }
+});
+
+app.get("/poc/getStatusByDate", authenticateToken, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { date } = req.query;
+    const employeeId = req.user.emp_id;
+
+    const permissionQuery = `
+      SELECT all_status_access 
+      FROM public.user_permissions 
+      WHERE emp_id = $1;
+    `;
+
+    const permissionResult = await client.query(permissionQuery, [employeeId]);
+    const hasAllStatusAccess = permissionResult.rows.length > 0 && permissionResult.rows[0].all_status_access === true;
+
+    let query;
+    let queryParams;
+
+    if (hasAllStatusAccess) {
+      query = `
+        SELECT 
+          id,
+          emp_name AS "employeeName",
+          emp_id AS "employeeId",
+          poc_prj_id AS "usecaseId",
+          poc_date AS "date",
+          status AS "description",
+          status,
+          hrs,
+          leads_email AS "leadIds",
+          department_name AS "departmentName"
+        FROM public.daily_poc_prj_status
+        WHERE poc_date = $1
+        ORDER BY id DESC;
+      `;
+      queryParams = [date];
+    } else {
+      query = `
+        SELECT 
+          id,
+          emp_name AS "employeeName",
+          emp_id AS "employeeId",
+          poc_prj_id AS "usecaseId",
+          poc_date AS "date",
+          status AS "description",
+          status,
+          hrs,
+          leads_email AS "leadIds",
+          department_name AS "departmentName"
+        FROM public.daily_poc_prj_status
+        WHERE poc_date = $1 AND emp_id = $2
+        ORDER BY id DESC;
+      `;
+      queryParams = [date, employeeId];
+    }
+
+    const result = await client.query(query, queryParams);
+
+    // ✅ Transform hrs ("HH:MM") → workingHours + workingMinutes
+    const formattedRows = result.rows.map((row) => {
+      let workingHours = 0;
+      let workingMinutes = 0;
+
+      if (row.hrs) {
+        const [h, m] = row.hrs.split(":");
+        workingHours = parseInt(h, 10);
+        workingMinutes = parseInt(m, 10);
+      }
+
+      // Get usecase name from usecases table or use the ID
+      const usecaseName = row.usecaseId; // You might want to join with usecases table to get the actual name
+
+      return {
+        id: row.id,
+        date: row.date,
+        usecaseName: usecaseName, // This should match what frontend expects
+        usecaseId: row.usecaseId,
+        leadName: row.leadNames || '',
+        leadIds: row.leadIds ? row.leadIds.split(",") : [],
+        status: row.status,
+        workingHours: workingHours,
+        workingMinutes: workingMinutes,
+        description: row.description || "",
+        employeeName: row.employeeName,
+        employeeId: row.employeeId,
+        departmentName: row.departmentName,
+        // Include permission info
+        hasAllStatusAccess: hasAllStatusAccess
+      };
+    });
+
+    res.json(formattedRows);
+  } catch (err) {
+    console.error("Error fetching status by date:", err);
     res.status(500).json({ message: "Internal server error" });
   } finally {
     client.release();
@@ -1787,7 +1940,7 @@ app.put("/poc/updateStatus/:id", authenticateToken, async (req, res) => {
     }
 
     // Validate status value
-    const validStatuses = ['Pending', 'In Progress', 'Completed', 'Dropped', 'Draft', 'Awaiting', 'Hold', 'Closed', 'Converted'];
+    const validStatuses = ['Pending', 'In Progress', 'Completed', 'Dropped', 'Draft', 'Awaiting', 'Hold', 'Closed', 'Converted', 'Live'];
     if (!validStatuses.includes(status)) {
       return res.status(400).json({
         message: "Invalid status value",
