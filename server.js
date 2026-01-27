@@ -30,7 +30,9 @@ const pool = new Pool({
   user: process.env.DB_USER || "postgres",
   host: process.env.DB_HOST || "localhost",
   // database: process.env.DB_NAME || "statusbot_poc",
-  database: process.env.DB_NAME || "msp_db_poc1",
+  // database: process.env.DB_NAME || "msp_db_poc1",
+  database: process.env.DB_NAME || "statusbot_poc_06_01",
+  // database: process.env.DB_NAME || "poc_bot",
   // password: process.env.DB_PASSWORD || "root",
   password: process.env.DB_PASSWORD || "nitin258",
   // port: process.env.DB_PORT || 5433,
@@ -38,20 +40,7 @@ const pool = new Pool({
 });
 
 
-
-// Email configuration
-// const emailConfig = {
-//   host: process.env.SMTP_HOST || 'smtp.gmail.com',
-//   // port: process.env.SMTP_PORT || 587,
-//   port: process.env.SMTP_PORT || 465,
-//   secure: true,
-//   auth: {
-//     user: process.env.SMTP_USER || 'alerts@automationedgerpa.com',
-//     pass: process.env.SMTP_PASS || 'zzarrvgjnvowydkf'
-
-//   }
-// };
-
+// Email configuration for initiated POC notifications
 const emailConfig = {
   host: process.env.SMTP_HOST || 'smtp.gmail.com',
   port: parseInt(process.env.SMTP_PORT) || 587,
@@ -71,11 +60,15 @@ const emailConfig = {
   logger: true
 };
 
-
+// This recipients list is for Initiated POC notifications
 // Recipients from environment variable (comma-separated)
-const POC_RECIPIENTS = process.env.POC_NOTIFICATION_RECIPIENTS || 'devopsbyzielotech@gmail.com,nitin.bhujbal@automationedge.com,suhas.kajawe@automationedge.com';
+const POC_RECIPIENTS = process.env.POC_NOTIFICATION_RECIPIENTS ||
+  'devopsbyzielotech@gmail.com,nitin.bhujbal@automationedge.com';
 
-
+// This recipients list is for Usecase code creation notifications
+// Recipients from environment variable (comma-separated)
+const USECASE_RECIPIENTS = process.env.USECASE_NOTIFICATION_RECIPIENTS ||
+  'nitin.bhujbal@automationedge.com,suhas.kajawe@automationedge.com';
 
 
 
@@ -116,7 +109,234 @@ app.get("/poc/api/auth/validate", authenticateToken, (req, res) => {
 
 
 
+app.get('/poc/getSummaryReport', authenticateToken, async (req, res) => {
+  console.log('Received request for summary report with query:', req.query);
+  try {
+    const { date } = req.query;
+    let targetDate = date;
 
+    // If no date provided, calculate last working day
+    if (!targetDate) {
+      const today = new Date();
+      let lastWorkingDay = new Date(today);
+
+      // Go back until we find a weekday (Monday=1 to Friday=5)
+      do {
+        lastWorkingDay.setDate(lastWorkingDay.getDate() - 1);
+      } while (lastWorkingDay.getDay() === 0 || lastWorkingDay.getDay() === 6);
+
+      targetDate = lastWorkingDay.toISOString().split('T')[0];
+    }
+
+    console.log('Fetching summary report for date:', targetDate);
+
+    // First, debug the date format in leave table
+    const debugQuery = `
+      SELECT emp_id, from_date, to_date, leave_status
+      FROM employee_leave_details 
+      WHERE emp_id IN ('AE0605', 'AE0901')
+      ORDER BY emp_id;
+    `;
+
+    try {
+      const debugResult = await pool.query(debugQuery);
+      console.log('Debug - Leave records for AE0605 and AE0901:');
+      debugResult.rows.forEach(row => {
+        console.log(`${row.emp_id}: ${row.from_date} to ${row.to_date} (${row.leave_status})`);
+      });
+    } catch (debugErr) {
+      console.log('Debug query failed:', debugErr.message);
+    }
+
+    // Get all active employees
+    const employeesQuery = `
+      SELECT 
+        emp_id,
+        emp_name,
+        email_id
+      FROM emp_details 
+      WHERE status='Active' and department_name = 'PCS ROW'
+      AND emp_id NOT IN ('AE0204','AE0751','AE0468','AE0802','VD0035','FB0154','AE0248','AE0510','AE0201','AE0007','AE0838')
+      ORDER BY emp_id;
+    `;
+
+    const employeesResult = await pool.query(employeesQuery);
+    const employees = employeesResult.rows;
+
+    if (employees.length === 0) {
+      return res.json([]);
+    }
+
+    // Get status data for the target date
+    const statusQuery = `
+      SELECT
+        emp_id,
+        ROUND(SUM(
+          EXTRACT(HOUR FROM hrs::time) +
+          EXTRACT(MINUTE FROM hrs::time) / 60.0 +
+          EXTRACT(SECOND FROM hrs::time) / 3600.0
+        ), 2) AS total_hrs
+      FROM daily_poc_prj_status
+      WHERE poc_date = $1::date
+      GROUP BY emp_id;
+    `;
+
+    const statusResult = await pool.query(statusQuery, [targetDate]);
+    const statusMap = new Map();
+    statusResult.rows.forEach(row => {
+      statusMap.set(row.emp_id, parseFloat(row.total_hrs));
+    });
+
+    // CORRECTED: Get employees on leave using proper date comparison
+    // We need to know the exact date format in the database
+    // Let's assume dates are stored as DD-MM-YYYY (as per your original query)
+
+    // Parse targetDate (YYYY-MM-DD) to DD-MM-YYYY
+    const [year, month, day] = targetDate.split('-');
+    const targetDateDDMMYYYY = `${day}-${month}-${year}`;
+
+    console.log('Checking leaves for date:', {
+      targetDate: targetDate,
+      targetDateDDMMYYYY: targetDateDDMMYYYY
+    });
+
+    // Use a safer approach: convert dates properly in SQL
+    const leaveQuery = `
+      SELECT DISTINCT emp_id
+      FROM employee_leave_details
+      WHERE 
+        -- First try to parse as DD-MM-YYYY (most likely format based on your query)
+        (
+          from_date ~ '^\\d{2}-\\d{2}-\\d{4}$' 
+          AND to_date ~ '^\\d{2}-\\d{2}-\\d{4}$'
+          AND TO_DATE($1, 'DD-MM-YYYY') BETWEEN 
+            TO_DATE(from_date, 'DD-MM-YYYY') 
+            AND TO_DATE(to_date, 'DD-MM-YYYY')
+        )
+        OR
+        -- Fallback: try YYYY-MM-DD format
+        (
+          from_date ~ '^\\d{4}-\\d{2}-\\d{2}$' 
+          AND to_date ~ '^\\d{4}-\\d{2}-\\d{2}$'
+          AND $2::date BETWEEN 
+            from_date::date 
+            AND to_date::date
+        )
+      AND (leave_status IS NULL OR LOWER(leave_status) IN ('approved', 'pending'));
+    `;
+
+    let leaveEmployees = new Set();
+
+    try {
+      const leaveResult = await pool.query(leaveQuery, [targetDateDDMMYYYY, targetDate]);
+      leaveResult.rows.forEach(row => {
+        leaveEmployees.add(row.emp_id);
+      });
+      console.log(`Found ${leaveEmployees.size} employees on leave`);
+
+      // Debug specific employees
+      if (leaveEmployees.has('AE0605') || leaveEmployees.has('AE0901')) {
+        console.log('DEBUG - Checking why these employees show as on leave:');
+        ['AE0605', 'AE0901'].forEach(empId => {
+          if (leaveEmployees.has(empId)) {
+            console.log(`${empId} is marked as on leave`);
+          }
+        });
+      }
+    } catch (leaveErr) {
+      console.log('Leave query failed, skipping leave check:', leaveErr.message);
+    }
+
+    // Format the response
+    const formattedData = employees.map(emp => {
+      const totalHrs = statusMap.get(emp.emp_id) || 0;
+      const isOnLeave = leaveEmployees.has(emp.emp_id);
+
+      // Correct logic: ON LEAVE only if no hours AND actually on leave
+      let statusUpdate;
+      if (totalHrs > 0) {
+        statusUpdate = 'YES'; // Submitted hours
+      } else if (isOnLeave) {
+        statusUpdate = 'ON LEAVE'; // No hours and on leave
+      } else {
+        statusUpdate = 'NO'; // No hours and not on leave
+      }
+
+      return {
+        emp_id: emp.emp_id,
+        emp_name: emp.emp_name,
+        email_id: emp.email_id,
+        status_update: statusUpdate,
+        total_hrs: parseFloat(totalHrs.toFixed(2))
+      };
+    });
+
+    // Add total row
+    if (formattedData.length > 0) {
+      const employeesOnly = formattedData.filter(emp => emp.emp_id !== 'Total');
+      const totalHours = employeesOnly.reduce((sum, emp) => sum + emp.total_hrs, 0);
+      const totalYes = employeesOnly.filter(emp => emp.status_update === 'YES').length;
+      const totalOnLeave = employeesOnly.filter(emp => emp.status_update === 'ON LEAVE').length;
+      const totalEmployees = employeesOnly.length;
+
+      let totalStatus = 'PARTIAL';
+      if (totalOnLeave === totalEmployees) {
+        totalStatus = 'ON LEAVE';
+      } else if (totalYes === totalEmployees) {
+        totalStatus = 'YES';
+      } else if (totalYes === 0 && totalOnLeave === 0) {
+        totalStatus = 'NO';
+      }
+
+      formattedData.push({
+        emp_id: 'Total',
+        emp_name: 'Team Total',
+        email_id: '',
+        status_update: totalStatus,
+        total_hrs: parseFloat(totalHours.toFixed(2))
+      });
+    }
+
+    // Sort: YES first, then NO, then ON LEAVE
+    const sortedData = formattedData
+      .filter(emp => emp.emp_id !== 'Total')
+      .sort((a, b) => {
+        const order = { 'YES': 1, 'NO': 2, 'ON LEAVE': 3 };
+        return (order[a.status_update] || 4) - (order[b.status_update] || 4) ||
+          a.emp_id.localeCompare(b.emp_id);
+      });
+
+    // Add total row back
+    const totalRow = formattedData.find(emp => emp.emp_id === 'Total');
+    if (totalRow) {
+      sortedData.push(totalRow);
+    }
+
+    // Debug output
+    console.log('\nFinal Report Summary:');
+    console.log(`Total employees: ${sortedData.filter(emp => emp.emp_id !== 'Total').length}`);
+    console.log(`YES: ${sortedData.filter(emp => emp.status_update === 'YES' && emp.emp_id !== 'Total').length}`);
+    console.log(`NO: ${sortedData.filter(emp => emp.status_update === 'NO' && emp.emp_id !== 'Total').length}`);
+    console.log(`ON LEAVE: ${sortedData.filter(emp => emp.status_update === 'ON LEAVE' && emp.emp_id !== 'Total').length}`);
+
+    // Show first few results
+    console.log('\nFirst 10 employees:');
+    sortedData.slice(0, 10).forEach(emp => {
+      if (emp.emp_id !== 'Total') {
+        console.log(`${emp.emp_id}: ${emp.status_update} (${emp.total_hrs} hrs)`);
+      }
+    });
+
+    res.json(sortedData);
+
+  } catch (error) {
+    console.error('Error in getSummaryReport:', error);
+    res.status(500).json({
+      error: 'Internal server error',
+      message: error.message
+    });
+  }
+});
 // Get all POCs - FIXED with type casting
 app.get("/poc/getAllPocs", authenticateToken, async (req, res) => {
   const client = await pool.connect();
@@ -549,6 +769,7 @@ app.get("/poc/getLeads", authenticateToken, async (req, res) => {
     const result = await pool.query(`
       SELECT lead_name, department_name, employee_name 
       FROM public.lead_details 
+      where lead_status = 'Active' and department_name = 'PCS ROW'
       ORDER BY lead_name
     `);
     console.log('Leads found:', result.rows.length);
@@ -573,7 +794,12 @@ app.get("/poc/permissions/:emp_id", authenticateToken, async (req, res) => {
         status_access,
         sales_access,
         all_status_access,
-        sales_admin  -- Make sure this column exists in your table
+        leave_access,
+        sales_admin ,
+        sales_dashboard_access,
+        status_status_access,
+        all_sales_access,
+        admin_access
       FROM public.user_permissions
       WHERE emp_id = $1;
     `;
@@ -586,8 +812,9 @@ app.get("/poc/permissions/:emp_id", authenticateToken, async (req, res) => {
         report_access: false,
         usecase_creation_access: false,
         status_access: false,
-        sales_access: true,
+        sales_access: false,
         all_status_access: false,
+        leave_access: false,
         sales_admin: false  // Default to false if no record found
       });
     }
@@ -712,19 +939,29 @@ app.get("/poc/getStatusByDate", authenticateToken, async (req, res) => {
     const { date } = req.query;
     const employeeId = req.user.emp_id;
 
+    // ✅ CHANGE: Fetch BOTH permissions, not just all_status_access
     const permissionQuery = `
-      SELECT all_status_access 
+      SELECT all_status_access, status_access 
       FROM public.user_permissions 
       WHERE emp_id = $1;
     `;
 
     const permissionResult = await client.query(permissionQuery, [employeeId]);
-    const hasAllStatusAccess = permissionResult.rows.length > 0 && permissionResult.rows[0].all_status_access === true;
+
+    // ✅ CHANGE: Check for both permissions
+    let hasAllAccess = false;
+    let hasStatusAccess = false;
+
+    if (permissionResult.rows.length > 0) {
+      hasAllAccess = permissionResult.rows[0].all_status_access === true;
+      hasStatusAccess = permissionResult.rows[0].status_access === true;
+    }
 
     let query;
     let queryParams;
 
-    if (hasAllStatusAccess) {
+    // ✅ CHANGE: Show all statuses if user has EITHER permission
+    if (hasAllAccess || hasStatusAccess) {
       query = `
         SELECT 
           id,
@@ -743,6 +980,7 @@ app.get("/poc/getStatusByDate", authenticateToken, async (req, res) => {
       `;
       queryParams = [date];
     } else {
+      // User has neither permission - show only their own status
       query = `
         SELECT 
           id,
@@ -781,7 +1019,7 @@ app.get("/poc/getStatusByDate", authenticateToken, async (req, res) => {
       return {
         id: row.id,
         date: row.date,
-        usecaseName: usecaseName, // This should match what frontend expects
+        usecaseName: usecaseName,
         usecaseId: row.usecaseId,
         leadName: row.leadNames || '',
         leadIds: row.leadIds ? row.leadIds.split(",") : [],
@@ -792,8 +1030,9 @@ app.get("/poc/getStatusByDate", authenticateToken, async (req, res) => {
         employeeName: row.employeeName,
         employeeId: row.employeeId,
         departmentName: row.departmentName,
-        // Include permission info
-        hasAllStatusAccess: hasAllStatusAccess
+        // ✅ CHANGE: Include both permission flags
+        hasAllStatusAccess: hasAllAccess,
+        hasStatusAccess: hasStatusAccess
       };
     });
 
@@ -1083,64 +1322,6 @@ ORDER BY start_date DESC;
 
 
 
-
-
-
-
-
-
-
-// // ✅ Login API using emp_details table
-// app.post("/poc/api/auth/login", async (req, res) => {
-//   try {
-//     const { username, password } = req.body;
-
-//     if (!username || !password) {
-//       return res.status(400).json({ message: "Username and password required" });
-//     }
-
-//     // Check against emp_details (login by emp_id or email_id)
-//     const result = await pool.query(
-//       `SELECT sr_no, emp_id, emp_name, email_id, role, password
-//        FROM emp_details
-//        WHERE emp_id = $1 OR email_id = $1`,
-//       [username]
-//     );
-
-//     if (result.rows.length === 0) {
-//       return res.status(401).json({ message: "Invalid username or password" });
-//     }
-
-//     const user = result.rows[0];
-//     const passwordMatch = (password === user.password);
-
-//     if (!passwordMatch) {
-//       return res.status(401).json({ message: "Invalid username or password" });
-//     }
-
-//     // Generate JWT
-//     const token = jwt.sign(
-//       { sr_no: user.sr_no, emp_id: user.emp_id, role: user.role },
-//       JWT_SECRET,
-//       { expiresIn: "1h" }
-//     );
-
-//     res.json({
-//       token,
-//       user: {
-//         sr_no: user.sr_no,
-//         emp_id: user.emp_id,
-//         emp_name: user.emp_name,
-//         email_id: user.email_id,
-//         role: user.role
-//       }
-//     });
-//   } catch (err) {
-//     console.error("Login error:", err);
-//     res.status(500).json({ message: "Internal server error" });
-//   }
-// });
-
 app.post("/poc/api/auth/login", async (req, res) => {
   try {
     const { username, password } = req.body;
@@ -1152,11 +1333,12 @@ app.post("/poc/api/auth/login", async (req, res) => {
     let user = null;
     let userType = '';
 
-    // First, check against emp_details (login by emp_id or email_id)
+    // ✅ ADD department_name here
     const empResult = await pool.query(
-      `SELECT sr_no, emp_id, emp_name, email_id, role, password
+      `SELECT sr_no, emp_id, emp_name, email_id, role, password, department_name
        FROM emp_details
-       WHERE emp_id = $1 OR email_id = $1`,
+       WHERE (emp_id = $1 OR email_id = $1)
+       AND status = 'Active'`,
       [username]
     );
 
@@ -1164,7 +1346,6 @@ app.post("/poc/api/auth/login", async (req, res) => {
       user = empResult.rows[0];
       userType = 'employee';
     } else {
-      // If not found in emp_details, check against salesperson_details
       const salespersonResult = await pool.query(
         `SELECT "Sr No" AS sr_no, salesperson_name, salesperson_email, password
          FROM salesperson_details
@@ -1176,71 +1357,157 @@ app.post("/poc/api/auth/login", async (req, res) => {
         user = salespersonResult.rows[0];
         userType = 'salesperson';
 
-        // For salesperson, set default emp_id and role
-        user.emp_id = "AE00";  // Default emp_id for salesperson
-        user.role = 0;  // Default role for salesperson (0 or any other placeholder)
+        user.emp_id = "AE00";
+        user.emp_name = user.salesperson_name;
+        user.role = 0;
+        user.department_name = "SALES"; // 🔹 optional but recommended
       }
     }
 
-    // If user not found in either table
     if (!user) {
       return res.status(401).json({ message: "Invalid username or password" });
     }
 
-    // Verify password
-    const passwordMatch = (password === user.password);
-
-    if (!passwordMatch) {
+    if (password !== user.password) {
       return res.status(401).json({ message: "Invalid username or password" });
     }
 
-    // Generate JWT with user type information
+    // ✅ ADD department_name to token
     const tokenPayload = {
       sr_no: user.sr_no,
       user_type: userType,
-      emp_id: user.emp_id,  // Include emp_id (AE00 for salesperson)
-      role: user.role       // Include role (0 for salesperson)
+      emp_id: user.emp_id,
+      emp_name: user.emp_name,
+      role: user.role,
+      department_name: user.department_name
     };
 
-    if (userType === 'employee') {
-      tokenPayload.emp_id = user.emp_id;
-      tokenPayload.role = user.role;
-    } else {
-      tokenPayload.salesperson_email = user.salesperson_email;
-    }
+    const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: "1h" });
 
-    const token = jwt.sign(
-      tokenPayload,
-      JWT_SECRET,
-      { expiresIn: "1h" }
-    );
-
-    // Unified response format for both employee and salesperson
-    let userResponse = {
+    // ✅ ADD department_name to response
+    const userResponse = {
       sr_no: user.sr_no,
-      emp_id: user.emp_id,  // emp_id (AE00 for salesperson)
-      role: user.role,      // role (0 for salesperson)
-      user_type: userType   // user_type: 'employee' or 'salesperson'
+      emp_id: user.emp_id,
+      emp_name: user.emp_name,
+      role: user.role,
+      user_type: userType,
+      department_name: user.department_name,
+      email_id: user.email_id
     };
 
-    // Additional fields for employees (specific to them)
-    if (userType === 'employee') {
-      userResponse.emp_name = user.emp_name;
-      userResponse.email_id = user.email_id;
-    } else {
-      // Additional fields for salesperson
-      userResponse.salesperson_name = user.salesperson_name;
-      userResponse.salesperson_email = user.salesperson_email;
-    }
-
-    res.json({
-      token,
-      user: userResponse
-    });
+    res.json({ token, user: userResponse });
 
   } catch (err) {
     console.error("Login error:", err);
     res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+
+app.post("/poc/api/auth/change-password", async (req, res) => {
+  try {
+    const { username, oldPassword, newPassword } = req.body;
+
+    // Validation
+    if (!username || !oldPassword || !newPassword) {
+      return res.status(400).json({
+        message: "Username, old password, and new password are required"
+      });
+    }
+
+    if (oldPassword === newPassword) {
+      return res.status(400).json({
+        message: "New password cannot be the same as old password"
+      });
+    }
+
+    let user = null;
+    let userType = '';
+    let tableName = '';
+
+    // Check in emp_details table first
+    const empResult = await pool.query(
+      `SELECT sr_no, emp_id, emp_name, email_id, role, password, department_name
+       FROM emp_details
+       WHERE (emp_id = $1 OR email_id = $1)
+       AND status = 'Active'`,
+      [username]
+    );
+
+    if (empResult.rows.length > 0) {
+      user = empResult.rows[0];
+      userType = 'employee';
+      tableName = 'emp_details';
+    } else {
+      // Check in salesperson_details table
+      const salespersonResult = await pool.query(
+        `SELECT "Sr No" AS sr_no, salesperson_name, salesperson_email, password
+         FROM salesperson_details
+         WHERE salesperson_email = $1`,
+        [username]
+      );
+
+      if (salespersonResult.rows.length > 0) {
+        user = salespersonResult.rows[0];
+        userType = 'salesperson';
+        tableName = 'salesperson_details';
+      }
+    }
+
+    if (!user) {
+      return res.status(404).json({
+        message: "User not found or account is inactive"
+      });
+    }
+
+    // Verify old password matches
+    if (oldPassword !== user.password) {
+      return res.status(401).json({
+        message: "Current password is incorrect"
+      });
+    }
+
+    // Update password based on user type
+    let updateQuery = '';
+    let updateParams = [];
+
+    if (userType === 'employee') {
+      updateQuery = `
+        UPDATE emp_details 
+        SET password = $1 
+        WHERE (emp_id = $2 OR email_id = $2) 
+        AND status = 'Active'
+      `;
+      updateParams = [newPassword, username];
+    } else if (userType === 'salesperson') {
+      updateQuery = `
+        UPDATE salesperson_details 
+        SET password = $1 
+        WHERE salesperson_email = $2
+      `;
+      updateParams = [newPassword, username];
+    }
+
+    await pool.query(updateQuery, updateParams);
+
+    res.status(200).json({
+      message: "Password updated successfully",
+      success: true
+    });
+
+  } catch (err) {
+    console.error("Change password error:", err);
+
+    if (err.code === '23505') {
+      return res.status(400).json({
+        message: "Password update failed due to constraint violation"
+      });
+    }
+
+    res.status(500).json({
+      message: "Internal server error",
+      error: err.message
+    });
   }
 });
 
@@ -1715,6 +1982,173 @@ async function generateNextPocId(prefix) {
 }
 
 
+
+
+
+
+// Method to send POC creation notification email
+const sendPOCNotificationEmail = async (pocData) => {
+
+  const clientPartnerDisplay =
+    `Client - ${pocData.entityName}` +
+    (pocData.partnerName && pocData.partnerName.trim()
+      ? `, Partner - ${pocData.partnerName}`
+      : '');
+
+  try {
+    const transporter = nodemailer.createTransport(emailConfig);
+
+    const emailSubject = `New POC ID Created: ${pocData.pocPrjId}`;
+
+    const emailHtml = `
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body {
+            font-family: 'Calibri', Arial, sans-serif;
+            line-height: 1.6;
+            color: #000000;
+            margin: 0;
+            padding: 20px;
+            background-color: #ffffff;
+        }
+        .container {
+            max-width: 700px;
+            margin: 0 auto;
+            background: #ffffff;
+        }
+        .content {
+            padding: 20px;
+        }
+        .greeting {
+            font-size: 14px;
+            color: #000000;
+            margin-bottom: 15px;
+            font-weight: normal;
+        }
+        .info-text {
+            font-size: 14px;
+            color: #000000;
+            margin-bottom: 20px;
+            line-height: 1.5;
+        }
+        .poc-table {
+            width: 100%;
+            border: 1px solid #000000;
+            border-collapse: collapse;
+            font-size: 14px;
+            font-family: Calibri, Arial, sans-serif;
+        }
+        .poc-table th {
+            background-color: rgba(57, 25, 201, 0.822);
+            color: #ffffff;
+            padding: 8px 12px;
+            text-align: left;
+            font-weight: bold;
+            border: 1px solid #000000;
+            font-size: 14px;
+        }
+        .poc-table td {
+            padding: 8px 12px;
+            border: 1px solid #000000;
+            background-color: #ffffff;
+            font-size: 14px;
+        }
+        .poc-table tr:nth-child(even) td {
+            background-color: #ffffff;
+        }
+        .field-column {
+            font-weight: bold;
+            color: #000000;
+            width: 35%;
+        }
+        .value-column {
+            color: #000000;
+            width: 65%;
+        }
+        .poc-id-value {
+            color: #000000;
+            font-weight: bold;
+        }
+        .footer {
+            margin-top: 20px;
+            padding: 15px 0;
+            border-top: 1px solid #cccccc;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="content">
+            <div class="greeting">Hi Team,</div>
+            
+            <div class="info-text">
+                Given POC ID already exists, so BOT has created new POC ID as below:
+            </div>
+            
+            <table class="poc-table" cellspacing="0" cellpadding="5">
+                <tr>
+                    <th>Field</th>
+                    <th>Value</th>
+                </tr>
+                <tr>
+                    <td class="field-column">POC ID</td>
+                    <td class="value-column poc-id-value">${pocData.pocPrjId}</td>
+                </tr>
+                <tr>
+                    <td class="field-column">POC Name</td>
+                    <td class="value-column">${pocData.pocName}</td>
+                </tr>
+                <tr>
+                    <td class="field-column">Name of Partner/Client/Internal</td>
+                    <td class="value-column">${clientPartnerDisplay}</td>
+                </tr>
+                <tr>
+                    <td class="field-column">Assigned To</td>
+                    <td class="value-column">${pocData.assignedTo}</td>
+                </tr>
+                <tr>
+                    <td class="field-column">Salesperson</td>
+                    <td class="value-column">${pocData.salesPerson}</td>
+                </tr>
+            </table>
+        </div>
+        
+        <div class="footer">
+            <font face='Cambria' color='#003b94'>
+            <br><p>Thanks & Regards,</font></br>
+            <font face='Cambria' color='#ff9100'><b>POC BOT</b></font><br>
+            <i><font face="Calibri" size="3" color="#003b94">
+            ------------------------------------------------------------------<br>
+            This is BOT generated email, please do not reply
+            </font></i>
+            <br><br>
+        </div>
+    </div>
+</body>
+</html>
+    `;
+
+    const mailOptions = {
+      from: emailConfig.auth.user,
+      to: USECASE_RECIPIENTS,
+      subject: emailSubject,
+      html: emailHtml,
+      text: `Hi Team,\n\nGiven POC ID already exists, so BOT has created new POC ID as below:\n\nPOC ID: ${pocData.pocPrjId}\nPOC Name: ${pocData.pocName}\nName of Partner/Client/Internal: ${clientPartnerDisplay}\nAssigned To: ${pocData.assignedTo}\nSalesperson: ${pocData.salesPerson}\n\nThanks & Regards,\nPOC BOT\n------------------------------------------------------------------\nThis is BOT generated email, please do not reply`
+    };
+
+    const result = await transporter.sendMail(mailOptions);
+    console.log("POC notification email sent successfully:", result.messageId);
+    return result;
+  } catch (error) {
+    console.error("Error sending POC notification email:", error);
+    throw error;
+  }
+};
+
+
+
 // Save POC with AutomationEdge integration
 app.post("/poc/savepocprjid", authenticateToken, async (req, res) => {
   const client = await pool.connect();
@@ -1795,72 +2229,22 @@ app.post("/poc/savepocprjid", authenticateToken, async (req, res) => {
 
     await client.query("COMMIT");
 
-    // ✅ Now trigger AutomationEdge workflow
-    // try {
-    //   // Authenticate
-    //   const sessionToken = await new Promise((resolve, reject) => {
-    //     unirest
-    //       .post("https://T4.automationedge.com/aeengine/rest/authenticate")
-    //       .query({ username: "Msp", password: "Msp@12345" })
-    //       .end((response) => {
-    //         if (response.error) reject("Authentication failed");
-    //         else resolve(response.body.sessionToken);
-    //       });
-    //   });
+    // ✅ Send email notification
+    try {
+      await sendPOCNotificationEmail({
+        pocPrjId,
+        pocName,
+        entityType,
+        entityName,
+        partnerName,
+        assignedTo,
+        salesPerson
+      });
+    } catch (emailError) {
+      console.error("Error sending notification email:", emailError);
+      // Don't throw error - email failure shouldn't fail the main operation
+    }
 
-    //   // Build request body for workflow
-    //   const requestBody = {
-    //     orgCode: "MSP_EVENT",
-    //     workflowName: "POC_BOT-Add_New_POC_PRJ_ID",
-    //     userId: "MSP Event",
-    //     source: "Rest Test",
-    //     responseMailSubject: 'null',
-    //     params: [
-    //       { name: 'poc_prj_id', type: 'String', value: pocPrjId },
-    //       { name: 'poc_prj_name', type: 'String', value: pocName },
-    //       { name: 'partner_client_own', type: 'String', value: entityType },
-    //       { name: 'client_name', type: 'String', value: entityName },
-    //       { name: 'sales_person', type: 'String', value: salesPerson },
-    //       { name: 'description', type: 'String', value: description },
-    //       { name: 'assigned_to', type: 'String', value: assignedTo },
-    //       { name: 'start_date', type: 'Date', value: startDate },
-    //       { name: 'excepted_end_date', type: 'Date', value: endDate },
-    //       { name: 'remarks', type: 'String', value: remark || '' },
-    //       { name: 'created_by', type: 'String', value: createdBy },
-    //       { name: 'region', type: 'String', value: region },
-    //       { name: 'is_billable', type: 'String', value: billableValue },
-    //       { name: 'poc_type', type: 'String', value: pocType },
-    //       { name: 'tag', type: 'String', value: tags },
-    //       { name: 'status', type: 'String', value: 'Draft' }, // Add status parameter
-
-    //       { name: 'chatBotEndPoint', type: 'String', value: null },
-    //       { name: 'additionalInfo', type: 'String', value: null },
-    //       { name: 'spoc_email_address', type: 'String', value: spocEmail },
-    //       { name: 'spoc_designation', type: 'String', value: spocDesignation },
-    //       { name: 'user_email', type: 'String', value: spocEmail }
-    //     ]
-    //   };
-
-    //   console.log(requestBody);
-    //   console.log(sessionToken);      // Execute workflow
-    //   const automationRequestId = await new Promise((resolve, reject) => {
-    //     unirest
-    //       .post("https://T4.automationedge.com/aeengine/rest/execute")
-    //       .headers({
-    //         "Content-Type": "application/json",
-    //         "X-Session-Token": sessionToken
-    //       })
-    //       .send(requestBody)
-    //       .end((response) => {
-    //         if (response.error) reject("Workflow execution failed");
-    //         else resolve(response.body.automationRequestId);
-    //       });
-    //   });
-
-    //   console.log("Workflow executed successfully:", automationRequestId);
-    // } catch (aeError) {
-    //   console.error("Error during AutomationEdge workflow execution:", aeError);
-    // }
 
     // Final API response
     res.status(201).json({
@@ -2233,6 +2617,2560 @@ app.post("/poc/save", authenticateToken, async (req, res) => {
 
 
 
+// In your backend - API endpoint to get employee list
+app.get('/poc/getEmployees', authenticateToken, async (req, res) => {
+  try {
+    const query = `
+            SELECT 
+                emp_id,
+                emp_name,
+                email_id
+            FROM emp_details 
+            WHERE status='Active' 
+            AND emp_id NOT IN ('AE0204','AE0751','AE0468','AE0802','VD0035','FB0154','AE0248','AE0510','AE0201','AE0007','AE0838')
+            ORDER BY emp_id
+        `;
+
+    const result = await pool.query(query);
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error fetching employees:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+
+
+
+
+// Summary Report API endpoint
+
+
+
+
+
+
+
+
+
+
+
+
+// In your server.js file, add these routes after your other routes:
+
+// ============================================
+// LEAVE MANAGEMENT ROUTES
+// ============================================
+
+// Email recipients
+const manager_mail_id = process.env.POC_NOTIFICATION_RECIPIENTS ||
+  'devopsbyzielotech@gmail.com';
+const pcs_row_mail_id = process.env.POC_NOTIFICATION_RECIPIENTS ||
+  'nitin.bhujbal@automationedge.com';
+
+// 1. Apply for Leave (POST)
+app.post('/poc/leave/apply', authenticateToken, async (req, res) => {
+  try {
+    console.log('=== LEAVE APPLICATION REQUEST ===');
+    console.log('Employee ID:', req.user?.emp_id);
+
+    // Get user info
+    const emp_id = req.user.emp_id;
+    const emp_name = req.user.emp_name || req.user.email_id;
+
+    if (!emp_id) {
+      return res.status(400).json({ error: 'User information not found in token' });
+    }
+
+    const {
+      leaveType,
+      startDate,
+      endDate,
+      days,
+      reason,
+      contactDuringLeave,
+      status = 'Pending for approval of reporting manager'
+    } = req.body;
+
+    // Validation
+    if (!leaveType || !startDate || !endDate || !days || !reason) {
+      return res.status(400).json({
+        error: 'Missing required fields',
+        received: { leaveType, startDate, endDate, days, reason }
+      });
+    }
+
+    // Format dates to DD-MM-YYYY
+    const formatDateToDDMMYYYY = (dateString) => {
+      if (!dateString) return null;
+      const date = new Date(dateString);
+      const day = String(date.getDate()).padStart(2, '0');
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const year = date.getFullYear();
+      return `${day}-${month}-${year}`;
+    };
+
+    // Format current date for apply_date
+    const today = new Date();
+    const formattedApplyDate = `${String(today.getDate()).padStart(2, '0')}-${String(today.getMonth() + 1).padStart(2, '0')}-${today.getFullYear()}`;
+
+    // Format start and end dates
+    const formattedStartDate = formatDateToDDMMYYYY(startDate);
+    const formattedEndDate = formatDateToDDMMYYYY(endDate);
+
+    console.log('Formatted Dates:', {
+      apply_date: formattedApplyDate,
+      from_date: formattedStartDate,
+      to_date: formattedEndDate
+    });
+
+    // Fetch employee email from emp_details table
+    console.log('Fetching employee email details...');
+    const empEmailQuery = `
+      SELECT email_id 
+      FROM emp_details 
+      WHERE emp_id = $1
+    `;
+
+    const empEmailResult = await pool.query(empEmailQuery, [emp_id]);
+
+    if (empEmailResult.rows.length === 0) {
+      console.error(`Employee with ID ${emp_id} not found in emp_details table`);
+      return res.status(404).json({
+        error: 'Employee details not found',
+        message: `Employee ID ${emp_id} does not exist in employee records`
+      });
+    }
+
+    const emp_email = empEmailResult.rows[0].email_id;
+    console.log(`Found employee email: ${emp_email}`);
+
+    // Set RM email (reporting manager email)
+    const rm_emp_email = 'piraji.doiphode@automationedge.com';
+
+    // Insert leave application with correct email and RM email
+    const query = `
+      INSERT INTO employee_leave_details (
+        emp_id, 
+        emp_name,
+        emp_email,
+        rm_emp_email,
+        leave_type, 
+        apply_date,
+        from_date, 
+        to_date, 
+        reason,
+        leave_status
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      RETURNING *
+    `;
+
+    const values = [
+      emp_id,
+      emp_name,
+      emp_email, // Use actual email from emp_details table
+      rm_emp_email, // Set RM email
+      leaveType,
+      formattedApplyDate, // Use formatted apply date
+      formattedStartDate, // Use formatted start date
+      formattedEndDate, // Use formatted end date
+      reason,
+      status
+    ];
+
+    console.log('Inserting leave application with values:', values);
+
+    const result = await pool.query(query, values);
+    const savedLeave = result.rows[0];
+
+    console.log(`Leave application saved: SR#${savedLeave.sr_no} for ${emp_id}`);
+    console.log('Email used:', emp_email);
+    console.log('RM Email set:', rm_emp_email);
+
+    // Send email with correct employee email
+    sendLeaveApplyEmail({
+      emp_id: emp_id,
+      emp_name: emp_name,
+      emp_email: emp_email, // Pass actual email
+      leave_type: leaveType,
+      start_date: startDate, // Keep original format for email
+      end_date: endDate, // Keep original format for email
+      days: parseFloat(days),
+      reason: reason,
+      contact_during_leave: contactDuringLeave || null,
+      status: status
+    }).then(success => {
+      if (success) {
+        console.log(`Leave application email sent for ${emp_id} to ${emp_email}`);
+      }
+    });
+
+    res.status(201).json({
+      message: 'Leave applied successfully',
+      leave: savedLeave
+    });
+
+  } catch (error) {
+    console.error('Error applying leave:', error.message);
+    console.error('Stack trace:', error.stack);
+
+    res.status(500).json({
+      error: 'Failed to apply for leave',
+      details: error.message
+    });
+  }
+});
+
+// Function to send leave application email
+const sendLeaveApplyEmail = async (leaveDetails) => {
+  try {
+    // Parse recipients (use same as revoke email)
+    const toRecipients = POC_RECIPIENTS.split(',').map(email => email.trim());
+
+    // Format dates
+    const formatDate = (dateString) => {
+      const date = new Date(dateString);
+      return date.toLocaleDateString('en-US', {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric'
+      });
+    };
+
+    // Format leave type
+    const formatLeaveType = (type) => {
+      const typeMap = {
+        sick: 'Sick Leave',
+        privileged: 'Privileged Leave',
+        casual: 'Casual Leave',
+        comp_off: 'Comp Off',
+        leave_without_pay: 'Leave Without Pay',
+        maternity: 'Maternity Leave',
+        paternity: 'Paternity Leave'
+      };
+      return typeMap[type] || type;
+    };
+
+    // Create email body
+    const emailBody = `
+Hi Team,
+
+I would like to apply for leave as per the details below:
+
+Employee ID: ${leaveDetails.emp_id}
+Employee Name: ${leaveDetails.emp_name}
+Employee Email: ${leaveDetails.emp_email}
+Leave Type: ${formatLeaveType(leaveDetails.leave_type)}
+Leave Period: ${formatDate(leaveDetails.start_date)} to ${formatDate(leaveDetails.end_date)}
+Number of Days: ${leaveDetails.days} ${leaveDetails.half_day ? '(Half Day)' : ''}
+Reason: ${leaveDetails.reason}
+Contact During Leave: ${leaveDetails.contact_during_leave || 'Not provided'}
+
+Kindly review and approve my leave request.
+
+Please let me know if any additional information is required.
+
+Thank you for your support.
+
+Thanks & Regards,
+POC Bot
+    `;
+
+    // Email options
+    const mailOptions = {
+      from: `"POC Bot" <${emailConfig.auth.user}>`,
+      to: manager_mail_id,
+      cc: pcs_row_mail_id, // CC the actual employee email
+      subject: 'Leave Application',
+      text: emailBody,
+      html: `
+        <div style="font-family: Arial, sans-serif; line-height: 1.6;">
+          <p>Hi Team,</p>
+          
+          <p>I would like to apply for leave as per the details below:</p>
+          
+          <table style="border-collapse: collapse; margin: 20px 0; width: 100%;">
+            <tr>
+              <td style="padding: 8px; border: 1px solid #ddd; width: 30%;"><strong>Employee ID:</strong></td>
+              <td style="padding: 8px; border: 1px solid #ddd; width: 70%;">${leaveDetails.emp_id}</td>
+            </tr>
+            <tr>
+              <td style="padding: 8px; border: 1px solid #ddd;"><strong>Employee Name:</strong></td>
+              <td style="padding: 8px; border: 1px solid #ddd;">${leaveDetails.emp_name}</td>
+            </tr>
+            <tr>
+              <td style="padding: 8px; border: 1px solid #ddd;"><strong>Employee Email:</strong></td>
+              <td style="padding: 8px; border: 1px solid #ddd;">${leaveDetails.emp_email}</td>
+            </tr>
+            <tr>
+              <td style="padding: 8px; border: 1px solid #ddd;"><strong>Leave Type:</strong></td>
+              <td style="padding: 8px; border: 1px solid #ddd;">${formatLeaveType(leaveDetails.leave_type)}</td>
+            </tr>
+            <tr>
+              <td style="padding: 8px; border: 1px solid #ddd;"><strong>Leave Period:</strong></td>
+              <td style="padding: 8px; border: 1px solid #ddd;">${formatDate(leaveDetails.start_date)} to ${formatDate(leaveDetails.end_date)}</td>
+            </tr>
+            <tr>
+              <td style="padding: 8px; border: 1px solid #ddd;"><strong>Number of Days:</strong></td>
+              <td style="padding: 8px; border: 1px solid #ddd;">${leaveDetails.days} ${leaveDetails.half_day ? '(Half Day - ' + (leaveDetails.half_day_type === 'first' ? 'First Half' : 'Second Half') + ')' : ''}</td>
+            </tr>
+            <tr>
+              <td style="padding: 8px; border: 1px solid #ddd;"><strong>Reason:</strong></td>
+              <td style="padding: 8px; border: 1px solid #ddd;">${leaveDetails.reason}</td>
+            </tr>
+            <tr>
+              <td style="padding: 8px; border: 1px solid #ddd;"><strong>Contact During Leave:</strong></td>
+              <td style="padding: 8px; border: 1px solid #ddd;">${leaveDetails.contact_during_leave || 'Not provided'}</td>
+            </tr>
+          </table>
+          
+          <p>Kindly review and approve my leave request.</p>
+          
+          <p>Please let me know if any additional information is required.</p>
+          
+          <p>Thank you for your support.</p>
+          
+           <br>
+            <font face='Cambria' color='#003b94'>
+              <p>Thanks & Regards,</p>
+            </font>
+            <font face='Cambria' color='#ff9100'>
+              <p>POC BOT</p>
+            </font>
+          <i>
+            <font face="Calibri" size="3" color="#003b94">
+              ------------------------------------------------------------------<br>
+              This is BOT generated email, please do not reply
+            </font>
+          </i>
+        </div>
+      `
+    };
+
+    // Send email
+    const info = await transporter.sendMail(mailOptions);
+    console.log(`Email sent successfully. Message ID: ${info.messageId}`);
+    return true;
+
+  } catch (error) {
+    console.error('Error sending leave application email:', error.message);
+    return false;
+  }
+};
+
+
+// 2. Get leave requests (GET)
+app.get('/poc/leave/requests', authenticateToken, async (req, res) => {
+  try {
+    const emp_id = req.user.emp_id;
+
+    // Check if user has all_status_access or status_access permission
+    const permissionQuery = `
+      SELECT all_status_access, status_access FROM user_permissions WHERE emp_id = $1
+    `;
+    const permissionResult = await pool.query(permissionQuery, [emp_id]);
+
+    let hasAllAccess = false;
+    let hasStatusAccess = false;
+
+    if (permissionResult.rows.length > 0) {
+      hasAllAccess = permissionResult.rows[0].all_status_access || false;
+      hasStatusAccess = permissionResult.rows[0].status_access || false;
+    }
+
+    let query;
+    let params = [];
+
+    // If user has all_status_access OR status_access, show all leaves
+    if (hasAllAccess || hasStatusAccess) {
+      query = `
+        SELECT 
+          sr_no as id,
+          emp_id,
+          emp_name,
+          leave_type,
+          from_date,
+          to_date,
+          apply_date,
+          reason,
+          leave_status as status,
+          emp_email,
+          rm_emp_email
+        FROM employee_leave_details 
+        ORDER BY sr_no DESC
+      `;
+    } else {
+      // Otherwise, show only their own leaves
+      query = `
+        SELECT 
+          sr_no as id,
+          emp_id,
+          emp_name,
+          leave_type,
+          from_date,
+          to_date,
+          apply_date,
+          reason,
+          leave_status as status,
+          emp_email,
+          rm_emp_email
+        FROM employee_leave_details 
+        WHERE emp_id = $1 
+        ORDER BY sr_no DESC
+      `;
+      params = [emp_id];
+    }
+
+    const result = await pool.query(query, params);
+
+    // Helper function to parse dates in multiple formats
+    const parseDate = (dateStr) => {
+      if (!dateStr || typeof dateStr !== 'string') return null;
+
+      dateStr = dateStr.trim();
+
+      // Try YYYY-MM-DD format
+      if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+        const [year, month, day] = dateStr.split('-').map(Number);
+        return new Date(year, month - 1, day);
+      }
+
+      // Try DD-MM-YYYY format
+      if (/^\d{2}-\d{2}-\d{4}$/.test(dateStr)) {
+        const [day, month, year] = dateStr.split('-').map(Number);
+        return new Date(year, month - 1, day);
+      }
+
+      // Try parsing as-is
+      const date = new Date(dateStr);
+      return !isNaN(date.getTime()) ? date : null;
+    };
+
+    // Helper function to format date to YYYY-MM-DD
+    const formatDateToYYYYMMDD = (dateStr) => {
+      if (!dateStr) return '';
+
+      const date = parseDate(dateStr);
+      if (!date) return dateStr;
+
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    };
+
+    // Calculate days between two dates
+    const calculateDays = (startDateStr, endDateStr) => {
+      const startDate = parseDate(startDateStr);
+      const endDate = parseDate(endDateStr);
+
+      if (!startDate || !endDate) return 1;
+
+      const start = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate());
+      const end = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate());
+
+      const diffTime = Math.abs(end - start);
+      const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+
+      return diffDays + 1;
+    };
+
+    // Transform the data
+    const transformedResult = result.rows.map(row => {
+      const days = calculateDays(row.from_date, row.to_date);
+      const formattedStartDate = formatDateToYYYYMMDD(row.from_date);
+      const formattedEndDate = formatDateToYYYYMMDD(row.to_date);
+
+      return {
+        id: row.id,
+        emp_id: row.emp_id,
+        emp_name: row.emp_name,
+        leave_type: row.leave_type,
+        start_date: formattedStartDate,
+        end_date: formattedEndDate,
+        days: days,
+        reason: row.reason,
+        contact_during_leave: null,
+        half_day: false,
+        half_day_type: 'first',
+        status: row.status,
+        applied_date: row.apply_date,
+        updated_at: row.apply_date,
+        emp_email: row.emp_email,
+        rm_emp_email: row.rm_emp_email
+      };
+    });
+
+    res.status(200).json(transformedResult);
+  } catch (error) {
+    console.error('Error fetching leave requests:', error);
+    res.status(500).json({ error: 'Failed to fetch leave requests' });
+  }
+});
+
+// Get user permissions endpoint
+// app.get('/poc/permissions/:emp_id', authenticateToken, async (req, res) => {
+//   try {
+//     const { emp_id } = req.params;
+
+//     const query = `
+//       SELECT * FROM user_permissions WHERE emp_id = $1
+//     `;
+
+//     const result = await pool.query(query, [emp_id]);
+
+//     if (result.rows.length === 0) {
+//       // Return default permissions if no record found
+//       return res.status(200).json({
+//         all_status_access: false,
+//         create_project: false,
+//         edit_project: false,
+//         delete_project: false
+//       });
+//     }
+
+//     res.status(200).json(result.rows[0]);
+//   } catch (error) {
+//     console.error('Error fetching permissions:', error);
+//     res.status(500).json({ error: 'Failed to fetch permissions' });
+//   }
+// });
+
+// LEAVE EDIT API - Fixed
+app.put('/poc/leave/edit/:id', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const emp_id = req.user.emp_id;
+    const {
+      leaveType,
+      startDate,
+      endDate,
+      reason,
+      contactDuringLeave,
+      halfDay,
+      halfDayType
+    } = req.body;
+
+    // 1. Check if leave exists - Get original details for email
+    const leaveQuery = `
+      SELECT sr_no, emp_id, emp_name, leave_type, from_date, to_date, reason, leave_status
+      FROM employee_leave_details WHERE sr_no = $1
+    `;
+    const leaveResult = await pool.query(leaveQuery, [id]);
+
+    if (leaveResult.rowCount === 0) {
+      return res.status(404).json({ error: 'Leave request not found' });
+    }
+
+    const originalLeave = leaveResult.rows[0];
+
+    // 2. Check if user can edit this leave
+    if (originalLeave.emp_id === emp_id) {
+      // User owns the leave - allow edit
+    } else {
+      // User doesn't own the leave - check if they have all_status_access
+      const permissionsQuery = `
+        SELECT all_status_access 
+        FROM user_permissions 
+        WHERE emp_id = $1
+      `;
+      const permissionsResult = await pool.query(permissionsQuery, [emp_id]);
+
+      // Check if user has all_status_access (assuming it's a boolean column)
+      if (permissionsResult.rowCount === 0 || !permissionsResult.rows[0].all_status_access) {
+        return res.status(403).json({
+          error: 'Not authorized to edit this leave'
+        });
+      }
+    }
+
+    // Format dates to DD-MM-YYYY (same as apply leave API)
+    const formatDateToDDMMYYYY = (dateString) => {
+      if (!dateString) return null;
+
+      // If already in DD-MM-YYYY format, return as is
+      if (dateString.match(/^\d{2}-\d{2}-\d{4}$/)) {
+        return dateString;
+      }
+
+      // If in YYYY-MM-DD format, convert to DD-MM-YYYY
+      if (dateString.match(/^\d{4}-\d{2}-\d{2}$/)) {
+        const parts = dateString.split('-');
+        const year = parts[0];
+        const month = parts[1];
+        const day = parts[2];
+        return `${day}-${month}-${year}`;
+      }
+
+      // Otherwise, parse as Date object
+      const date = new Date(dateString);
+      const day = String(date.getDate()).padStart(2, '0');
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const year = date.getFullYear();
+      return `${day}-${month}-${year}`;
+    };
+
+    // Format start and end dates
+    const formattedStartDate = formatDateToDDMMYYYY(startDate);
+    const formattedEndDate = formatDateToDDMMYYYY(endDate);
+
+    console.log('Edit - Formatted Dates:', {
+      from_date: formattedStartDate,
+      to_date: formattedEndDate
+    });
+
+    // 3. Calculate days for updated leave
+    const calculateDays = () => {
+      if (halfDay) return 0.5;
+
+      // Parse dates for calculation
+      const parseDate = (dateStr) => {
+        // Handle DD-MM-YYYY format
+        if (dateStr.match(/^\d{2}-\d{2}-\d{4}$/)) {
+          const parts = dateStr.split('-');
+          return new Date(parts[2], parts[1] - 1, parts[0]);
+        }
+        // Handle YYYY-MM-DD format
+        if (dateStr.match(/^\d{4}-\d{2}-\d{2}$/)) {
+          return new Date(dateStr);
+        }
+        return new Date(dateStr);
+      };
+
+      const start = parseDate(formattedStartDate);
+      const end = parseDate(formattedEndDate);
+      const timeDiff = Math.abs(end.getTime() - start.getTime());
+      return Math.ceil(timeDiff / (1000 * 3600 * 24)) + 1;
+    };
+
+    const updatedDays = calculateDays();
+
+    // 4. Update leave in employee_leave_details table
+    const updateQuery = `
+      UPDATE employee_leave_details 
+      SET 
+        leave_type = $1,
+        from_date = $2,
+        to_date = $3,
+        reason = $4
+      WHERE sr_no = $5
+      RETURNING *
+    `;
+
+    const values = [
+      leaveType,
+      formattedStartDate,  // Use formatted date (DD-MM-YYYY)
+      formattedEndDate,    // Use formatted date (DD-MM-YYYY)
+      reason,
+      id
+    ];
+
+    console.log('Update query values:', values);
+
+    const result = await pool.query(updateQuery, values);
+    const updatedLeave = result.rows[0];
+
+    // Add days to the updatedLeave object for email
+    updatedLeave.days = updatedDays;
+
+    console.log('Updated leave record:', updatedLeave);
+
+    // 5. Format dates for email (use original input format)
+    const formatForEmail = (dateStr) => {
+      if (!dateStr) return dateStr;
+
+      // If already in YYYY-MM-DD, convert to readable format
+      if (dateStr.match(/^\d{4}-\d{2}-\d{2}$/)) {
+        const parts = dateStr.split('-');
+        return `${parts[2]}-${parts[1]}-${parts[0]}`;
+      }
+
+      // If in DD-MM-YYYY, return as is
+      if (dateStr.match(/^\d{2}-\d{2}-\d{4}$/)) {
+        return dateStr;
+      }
+
+      return dateStr;
+    };
+
+    // Prepare data for email
+    const originalForEmail = {
+      ...originalLeave,
+      from_date: formatForEmail(originalLeave.from_date),
+      to_date: formatForEmail(originalLeave.to_date)
+    };
+
+    const updatedForEmail = {
+      ...updatedLeave,
+      from_date: formattedStartDate, // Already in DD-MM-YYYY format
+      to_date: formattedEndDate,     // Already in DD-MM-YYYY format
+      days: updatedDays
+    };
+
+    // 6. Send email notification in background
+    sendLeaveUpdateEmail(originalForEmail, updatedForEmail, req.user.emp_name || req.user.email_id)
+      .then(success => {
+        if (success) {
+          console.log('Leave update email sent successfully');
+        } else {
+          console.log('Failed to send leave update email');
+        }
+      })
+      .catch(err => {
+        console.error('Error in leave update email process:', err);
+      });
+
+    res.status(200).json({
+      message: 'Leave request updated successfully',
+      leave: updatedLeave  // This will have dates in DD-MM-YYYY format
+    });
+  } catch (error) {
+    console.error('Error updating leave:', error);
+    console.error('Error stack:', error.stack);
+    res.status(500).json({ error: 'Failed to update leave request' });
+  }
+});
+
+// Format days - remove decimal for whole numbers
+const formatDays = (days) => {
+  const numDays = Number(days); // Convert to number first
+
+  // If days is a whole number, show without decimal
+  if (Number.isInteger(numDays)) {
+    return numDays.toString();
+  }
+  // If it's 0.5 (half day), show as "0.5"
+  if (numDays === 0.5) {
+    return '0.5 (Half Day)';
+  }
+  // For other decimal values, show with 1 decimal place
+  return numDays.toFixed(1);
+};
+
+// Function to send leave update email
+const sendLeaveUpdateEmail = async (originalLeave, updatedLeave, updatedByName) => {
+  try {
+    // Parse recipients (use same as other emails)
+    const toRecipients = manager_mail_id.split(',').map(email => email.trim());
+    const ccRecipients = pcs_row_mail_id.split(',').map(email => email.trim());
+
+    // Helper function to parse dates in multiple formats
+    const parseDate = (dateStr) => {
+      if (!dateStr || typeof dateStr !== 'string') return null;
+
+      dateStr = dateStr.trim();
+
+      // Try YYYY-MM-DD format
+      if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+        const [year, month, day] = dateStr.split('-').map(Number);
+        return new Date(year, month - 1, day);
+      }
+
+      // Try DD-MM-YYYY format
+      if (/^\d{2}-\d{2}-\d{4}$/.test(dateStr)) {
+        const [day, month, year] = dateStr.split('-').map(Number);
+        return new Date(year, month - 1, day);
+      }
+
+      // Try parsing as-is
+      const date = new Date(dateStr);
+      return !isNaN(date.getTime()) ? date : null;
+    };
+
+    // Format dates for display
+    const formatDate = (dateString) => {
+      const date = parseDate(dateString);
+      if (!date) return 'Invalid Date';
+      return date.toLocaleDateString('en-US', {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric'
+      });
+    };
+
+    // Format leave type
+    const formatLeaveType = (type) => {
+      const typeMap = {
+        sick: 'Sick Leave',
+        privileged: 'Privileged Leave',
+        casual: 'Casual Leave',
+        comp_off: 'Comp Off',
+        leave_without_pay: 'Leave Without Pay',
+        maternity: 'Maternity Leave',
+        paternity: 'Paternity Leave'
+      };
+      return typeMap[type] || type;
+    };
+
+    // Create email body
+    const emailBody = `
+Hi Team,
+
+I would like to request an update to my previously applied leave. Please find the revised details below:
+
+Original Leave Details:
+
+Employee ID: ${originalLeave.emp_id}
+Employee Name: ${originalLeave.emp_name || 'N/A'}
+Leave Type: ${formatLeaveType(originalLeave.leave_type)}
+Leave Period: ${formatDate(originalLeave.from_date)} to ${formatDate(originalLeave.to_date)}
+
+Updated Leave Details:
+
+Leave Type: ${formatLeaveType(updatedLeave.leave_type)}
+Leave Period: ${formatDate(updatedLeave.from_date)} to ${formatDate(updatedLeave.to_date)}
+Number of Days: ${formatDays(updatedLeave.days)}
+Reason for Update: ${updatedLeave.reason}
+
+Kindly consider the above changes and update the leave request accordingly.
+
+Please let me know if any further information is required from my end.
+
+Thank you for your support.
+
+Thanks & Regards,
+POC Bot
+
+---
+Note: This leave was updated by ${updatedByName}
+    `;
+
+    // Email options
+    const mailOptions = {
+      from: `"POC Bot" <${emailConfig.auth.user}>`,
+      to: manager_mail_id,
+      cc: pcs_row_mail_id,
+      subject: 'Request to Update Applied Leave',
+      text: emailBody,
+      html: `
+        <div style="font-family: Arial, sans-serif; line-height: 1.6;">
+          <p>Hi Team,</p>
+          
+          <p>I would like to request an update to my previously applied leave. Please find the revised details below:</p>
+          
+          <h4 style="color: #333; margin: 20px 0 10px 0;">Original Leave Details:</h4>
+          <table style="border-collapse: collapse; margin: 0 0 20px 0; width: 100%;">
+            <tr>
+              <td style="padding: 8px; border: 1px solid #ddd; width: 30%;"><strong>Employee ID:</strong></td>
+              <td style="padding: 8px; border: 1px solid #ddd; width: 70%;">${originalLeave.emp_id}</td>
+            </tr>
+            <tr>
+              <td style="padding: 8px; border: 1px solid #ddd;"><strong>Employee Name:</strong></td>
+              <td style="padding: 8px; border: 1px solid #ddd;">${originalLeave.emp_name || 'N/A'}</td>
+            </tr>
+            <tr>
+              <td style="padding: 8px; border: 1px solid #ddd;"><strong>Leave Type:</strong></td>
+              <td style="padding: 8px; border: 1px solid #ddd;">${formatLeaveType(originalLeave.leave_type)}</td>
+            </tr>
+            <tr>
+              <td style="padding: 8px; border: 1px solid #ddd;"><strong>Leave Period:</strong></td>
+              <td style="padding: 8px; border: 1px solid #ddd;">${formatDate(originalLeave.from_date)} to ${formatDate(originalLeave.to_date)}</td>
+            </tr>
+          </table>
+          
+          <h4 style="color: #333; margin: 20px 0 10px 0;">Updated Leave Details:</h4>
+          <table style="border-collapse: collapse; margin: 0 0 20px 0; width: 100%;">
+            <tr>
+              <td style="padding: 8px; border: 1px solid #ddd; width: 30%;"><strong>Leave Type:</strong></td>
+              <td style="padding: 8px; border: 1px solid #ddd; width: 70%;">${formatLeaveType(updatedLeave.leave_type)}</td>
+            </tr>
+            <tr>
+              <td style="padding: 8px; border: 1px solid #ddd;"><strong>Leave Period:</strong></td>
+              <td style="padding: 8px; border: 1px solid #ddd;">${formatDate(updatedLeave.from_date)} to ${formatDate(updatedLeave.to_date)}</td>
+            </tr>
+            <tr>
+              <td style="padding: 8px; border: 1px solid #ddd;"><strong>Number of Days:</strong></td>
+              <td style="padding: 8px; border: 1px solid #ddd;">${formatDays(updatedLeave.days)}</td>
+            </tr>
+            <tr>
+              <td style="padding: 8px; border: 1px solid #ddd;"><strong>Reason for Update:</strong></td>
+              <td style="padding: 8px; border: 1px solid #ddd;">${updatedLeave.reason}</td>
+            </tr>
+          </table>
+          
+          <p>Kindly consider the above changes and update the leave request accordingly.</p>
+          
+          <p>Please let me know if any further information is required from my end.</p>
+          
+          <p>Thank you for your support.</p>
+          
+          <br>
+            <font face='Cambria' color='#003b94'>
+              <p>Thanks & Regards,</p>
+            </font>
+            <font face='Cambria' color='#ff9100'>
+              <p>POC BOT</p>
+            </font>
+          <i>
+            <font face="Calibri" size="3" color="#003b94">
+              ------------------------------------------------------------------<br>
+              This is BOT generated email, please do not reply
+            </font>
+          </i>
+          
+          <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;">
+          <p style="font-size: 12px; color: #666;">
+            Note: This leave was updated by <strong>${updatedByName}</strong>
+          </p>
+        </div>
+      `
+    };
+
+    // Send email
+    const info = await transporter.sendMail(mailOptions);
+    console.log('Leave update email sent:', info.messageId);
+    return true;
+
+  } catch (error) {
+    console.error('Error sending leave update email:', error);
+    return false;
+  }
+};
+
+
+
+// 4. Delete (Revoke) leave request (DELETE)
+app.delete('/poc/leave/delete/:id', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const emp_id = req.user.emp_id;
+
+    // Get data from request body
+    const { revokeMessage, employeeName, revokedByName } = req.body || {};
+
+    // 1. Check if leave exists
+    const leaveQuery = `
+      SELECT sr_no, emp_id, emp_name, leave_type, from_date, to_date, reason 
+      FROM employee_leave_details WHERE sr_no = $1
+    `;
+    const leaveResult = await pool.query(leaveQuery, [id]);
+
+    if (leaveResult.rowCount === 0) {
+      return res.status(404).json({ error: 'Leave request not found' });
+    }
+
+    const leave = leaveResult.rows[0];
+
+    // 2. Check if user can delete this leave
+    if (leave.emp_id === emp_id) {
+      // User owns the leave - allow delete
+    } else {
+      // User doesn't own the leave - check if they have all_status_access
+      const permissionsQuery = `
+        SELECT all_status_access 
+        FROM user_permissions 
+        WHERE emp_id = $1
+      `;
+      const permissionsResult = await pool.query(permissionsQuery, [emp_id]);
+
+      if (permissionsResult.rowCount === 0 || !permissionsResult.rows[0].all_status_access) {
+        return res.status(403).json({
+          error: 'Not authorized to delete this leave'
+        });
+      }
+    }
+
+    // 3. Log the revoke message before deleting
+    console.log('=== LEAVE REVOKE LOG ===');
+    console.log('Timestamp:', new Date().toISOString());
+    console.log('Revoked By User ID:', emp_id);
+    console.log('Revoked By Name:', revokedByName || 'Unknown');
+    console.log('Leave Details:', {
+      leaveId: id,
+      employeeId: leave.emp_id,
+      employeeName: employeeName || leave.emp_name || 'Unknown',
+      leaveType: leave.leave_type,
+      startDate: leave.from_date,
+      endDate: leave.to_date,
+      reason: leave.reason
+    });
+
+    if (revokeMessage && revokeMessage.trim() !== '') {
+      console.log('Revoke Message:', revokeMessage);
+    } else {
+      console.log('Revoke Message: [No message provided]');
+    }
+
+    console.log('=== END REVOKE LOG ===');
+
+    // 4. Send email notification
+    sendRevokeEmail({
+      sr_no: leave.sr_no,
+      emp_id: leave.emp_id,
+      emp_name: employeeName || leave.emp_name || 'Unknown',
+      leave_type: leave.leave_type,
+      from_date: leave.from_date,
+      to_date: leave.to_date,
+      reason: leave.reason
+    }, emp_id, revokeMessage)
+      .then(success => {
+        if (success) {
+          console.log('Revoke email notification sent successfully');
+        } else {
+          console.log('Failed to send revoke email notification');
+        }
+      })
+      .catch(err => {
+        console.error('Error in email sending process:', err);
+      });
+
+    // 5. Delete leave
+    const deleteQuery = `
+      DELETE FROM employee_leave_details 
+      WHERE sr_no = $1
+      RETURNING sr_no
+    `;
+
+    const result = await pool.query(deleteQuery, [id]);
+
+    res.status(200).json({
+      message: 'Leave request revoked successfully'
+    });
+  } catch (error) {
+    console.error('Error revoking leave:', error);
+    res.status(500).json({ error: 'Failed to revoke leave request' });
+  }
+});
+
+// Helper function to send email
+const sendRevokeEmail = async (leaveDetails, revokerId, revokeMessage) => {
+  try {
+    // Parse recipients
+    const toRecipients = manager_mail_id.split(',').map(email => email.trim());
+    const ccRecipients = pcs_row_mail_id.split(',').map(email => email.trim());
+
+    // Helper function to parse dates in multiple formats
+    const parseDate = (dateStr) => {
+      if (!dateStr || typeof dateStr !== 'string') return null;
+
+      dateStr = dateStr.trim();
+
+      // Try YYYY-MM-DD format
+      if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+        const [year, month, day] = dateStr.split('-').map(Number);
+        return new Date(year, month - 1, day);
+      }
+
+      // Try DD-MM-YYYY format
+      if (/^\d{2}-\d{2}-\d{4}$/.test(dateStr)) {
+        const [day, month, year] = dateStr.split('-').map(Number);
+        return new Date(year, month - 1, day);
+      }
+
+      // Try parsing as-is
+      const date = new Date(dateStr);
+      return !isNaN(date.getTime()) ? date : null;
+    };
+
+    // Format dates for display
+    const formatDate = (dateString) => {
+      const date = parseDate(dateString);
+      if (!date) return 'Invalid Date';
+      return date.toLocaleDateString('en-US', {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric'
+      });
+    };
+
+    // Create email body
+    const emailBody = `
+Hi Team,
+
+I would like to request the revocation of the previously applied leave as per the details below:
+
+Employee ID: ${leaveDetails.emp_id}
+Employee Name: ${leaveDetails.emp_name || 'N/A'}
+Leave Type: ${leaveDetails.leave_type || 'N/A'}
+Leave Period: ${formatDate(leaveDetails.from_date)} to ${formatDate(leaveDetails.to_date)}
+Reason for Revocation: ${revokeMessage || 'No reason provided'}
+
+Kindly revoke the above-mentioned leave request at your convenience.
+
+Please let me know if any further information is required from my end.
+
+Thank you for your support.
+
+ 
+    Thanks & Regards,
+    POC Bot
+
+---
+Note: This leave was revoked by User ID: ${revokerId}
+    `;
+
+    // Email options
+    const mailOptions = {
+      from: `"POC Bot" <${emailConfig.auth.user}>`,
+      to: manager_mail_id,
+      cc: pcs_row_mail_id,
+      subject: 'Request to Revoke Leave Application',
+      text: emailBody,
+      html: `
+        <div style="font-family: Arial, sans-serif; line-height: 1.6;">
+          <p>Hi Team,</p>
+          
+          <p>I would like to request the revocation of the previously applied leave as per the details below:</p>
+          
+          <table style="border-collapse: collapse; margin: 20px 0;">
+            <tr>
+              <td style="padding: 8px; border: 1px solid #ddd;"><strong>Employee ID:</strong></td>
+              <td style="padding: 8px; border: 1px solid #ddd;">${leaveDetails.emp_id}</td>
+            </tr>
+            <tr>
+              <td style="padding: 8px; border: 1px solid #ddd;"><strong>Employee Name:</strong></td>
+              <td style="padding: 8px; border: 1px solid #ddd;">${leaveDetails.emp_name || 'N/A'}</td>
+            </tr>
+            <tr>
+              <td style="padding: 8px; border: 1px solid #ddd;"><strong>Leave Type:</strong></td>
+              <td style="padding: 8px; border: 1px solid #ddd;">${leaveDetails.leave_type || 'N/A'}</td>
+            </tr>
+            <tr>
+              <td style="padding: 8px; border: 1px solid #ddd;"><strong>Leave Period:</strong></td>
+              <td style="padding: 8px; border: 1px solid #ddd;">${formatDate(leaveDetails.from_date)} to ${formatDate(leaveDetails.to_date)}</td>
+            </tr>
+            <tr>
+              <td style="padding: 8px; border: 1px solid #ddd;"><strong>Reason for Revocation:</strong></td>
+              <td style="padding: 8px; border: 1px solid #ddd;">${revokeMessage || 'No reason provided'}</td>
+            </tr>
+          </table>
+          
+          <p>Kindly revoke the above-mentioned leave request at your convenience.</p>
+          
+          <p>Please let me know if any further information is required from my end.</p>
+          
+          <p>Thank you for your support.</p>
+          
+           <br>
+            <font face='Cambria' color='#003b94'>
+              <p>Thanks & Regards,</p>
+            </font>
+            <font face='Cambria' color='#ff9100'>
+              <p>POC BOT</p>
+            </font>
+          <i>
+            <font face="Calibri" size="3" color="#003b94">
+              ------------------------------------------------------------------<br>
+              This is BOT generated email, please do not reply
+            </font>
+          </i>
+          
+          <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;">
+          <p style="font-size: 12px; color: #666;">
+            Note: This leave was revoked by User ID: ${revokerId}
+          </p>
+        </div>
+      `
+    };
+
+    // Send email
+    const info = await transporter.sendMail(mailOptions);
+    console.log('Revoke email sent:', info.messageId);
+    return true;
+
+  } catch (error) {
+    console.error('Error sending revoke email:', error);
+    return false;
+  }
+};
+
+
+
+
+////-----------------------salesss
+
+app.get("/poc/sales/all", authenticateToken, async (req, res) => {
+  try {
+    const empName = req.user.emp_name;
+    const role = req.user.role;
+    const empId = req.user.emp_id;
+
+    console.log("EMP:", empName, "ROLE:", role, "EMP_ID:", empId);
+
+    // First, get the user's permissions to check all_sales_access
+    let allSalesAccess = false;
+    try {
+      const permQuery = `
+        SELECT all_sales_access 
+        FROM public.user_permissions 
+        WHERE emp_id = $1
+      `;
+      const permResult = await pool.query(permQuery, [empId]);
+      if (permResult.rows.length > 0) {
+        allSalesAccess = permResult.rows[0].all_sales_access || false;
+      }
+    } catch (permErr) {
+      console.error("Error fetching permissions:", permErr);
+      // Continue without permissions - defaults to false
+    }
+
+    console.log("All Sales Access:", allSalesAccess);
+
+    const result = await pool.query(`
+      SELECT 
+        p.poc_prj_id            AS "pocId",
+        p.poc_prj_name          AS "pocName",
+        p.client_name           AS "entityName",
+        p.partner_client_own    AS "entityType",
+        p.sales_person          AS "salesPerson",
+        p.region,
+        p.status,
+        p.start_date            AS "startDate",
+        p.excepted_end_date     AS "endDate",
+        p.actual_start_date     AS "actualStartDate",
+        p.actual_end_date       AS "actualEndDate",
+        p.poc_type              AS "pocType",
+        p.description,
+        p.spoc_email_address    AS "spocEmail",
+        p.spoc_designation      AS "spocDesignation",
+        p.tag                   AS "tags",
+        p.assigned_to           AS "assignedTo",
+        p.created_by            AS "createdBy",
+        p.remarks               AS "remark",
+        p.estimated_efforts     AS "estimatedEfforts",
+        p.approved_by           AS "approvedBy",
+        p.total_efforts         AS "totalEfforts",
+        p.partner_name          AS "partnerName",
+
+        COALESCE((
+          SELECT SUM(
+            CASE 
+              WHEN hrs ~ '^[0-9]+:[0-9]+$' 
+                THEN split_part(hrs, ':', 1)::int
+                   + split_part(hrs, ':', 2)::int / 60.0
+              WHEN hrs ~ '^[0-9]+$'
+                THEN hrs::int
+              ELSE 0
+            END
+          )
+          FROM public.daily_poc_prj_status d 
+          WHERE d.poc_prj_id = p.poc_prj_id::text
+        ), 0) AS "totalWorkedHours"
+
+      FROM public.poc_prj_sales_details p
+      WHERE (
+        $2 IN ('ADMIN', 'Department Admin')
+        OR $3 = true  -- all_sales_access permission
+        OR p.created_by = $1
+        OR $1 = ANY (
+          SELECT trim(x)
+          FROM unnest(string_to_array(p.assigned_to, ',')) AS x
+        )
+      )
+      ORDER BY p.poc_prj_id DESC
+    `, [empName, role, allSalesAccess]);
+
+    res.json(result.rows);
+  } catch (err) {
+    console.error("Error fetching Sales Usecases:", err);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+
+
+
+async function generateNextsales(prefix) {
+  try {
+    // Convert prefix to lowercase for case-insensitive comparison
+    const prefixLower = prefix.toLowerCase();
+
+    const result = await pool.query(
+      `SELECT poc_prj_id 
+       FROM public.poc_prj_sales_details
+       WHERE LOWER(poc_prj_id) LIKE $1`,
+      [prefixLower + "-%"]
+    );
+
+    console.log('🔍 DEBUG generateNextPocId:');
+    console.log('Original Prefix:', prefix);
+    console.log('Lowercase Prefix:', prefixLower);
+    console.log('Found existing IDs:', result.rows);
+
+    if (result.rows.length === 0) {
+      return `${prefix}-01`;
+    }
+
+    let highestNumber = 0;
+
+    // Find the highest number among ALL matching IDs
+    for (const row of result.rows) {
+      const id = row.poc_prj_id;
+      const match = id.match(/-(\d+)$/i);
+
+      if (match) {
+        const num = parseInt(match[1], 10);
+        if (!isNaN(num) && num > highestNumber) {
+          highestNumber = num;
+        }
+      }
+    }
+
+    const nextNumber = highestNumber + 1;
+
+    // Use appropriate padding based on the number size
+    const nextId = highestNumber >= 100 ?
+      `${prefix}-${nextNumber}` :
+      `${prefix}-${nextNumber.toString().padStart(2, '0')}`;
+
+    console.log('Highest number found:', highestNumber);
+    console.log('Next number:', nextNumber);
+    console.log('Generated next ID:', nextId);
+
+    return nextId;
+
+  } catch (error) {
+    console.error('Error generating next POC ID:', error);
+    return `${prefix}-01`;
+  }
+}
+app.post("/poc/sales/savepocprjid", authenticateToken, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    /* =========================
+       🔹 FRONTEND PAYLOAD
+       ========================= */
+    const {
+      pocId,
+      pocName,
+      entityName,
+      entityType,
+      salesPerson,
+      region,
+      startDate,
+      endDate,
+      actualStartDate,
+      actualEndDate,
+      pocType,
+      description,
+      spocEmail,
+      spocDesignation,
+      tags,
+      assignedTo,
+      createdBy,
+      remark,
+      estimatedEfforts,
+      approvedBy,
+      totalEfforts,
+      partnerName
+    } = req.body;
+
+    console.log("Incoming payload:", req.body);
+
+    /* =========================
+       🔁 MAP → DB FIELDS
+       ========================= */
+    const poc_prj_name = pocName;
+    const client_name = entityName;
+    const partner_client_own = entityType;
+    const sales_person = salesPerson;
+    const start_date = startDate;
+    const excepted_end_date = endDate;
+    const actual_start_date = actualStartDate || null;
+    const actual_end_date = actualEndDate || null;
+    const poc_type = pocId;
+    const spoc_email_address = spocEmail;
+    const spoc_designation = spocDesignation;
+    const tag = tags;
+    const assigned_to = assignedTo;
+    const created_by = createdBy;
+    const remarks = remark;
+    const partner_name = partnerName;
+
+    await client.query("BEGIN");
+
+    /* =========================
+       🔹 INSERT QUERY
+       ========================= */
+    const insertQuery = `
+      INSERT INTO public.poc_prj_sales_details (
+        poc_prj_name,
+        client_name,
+        partner_client_own,
+        sales_person,
+        region,
+        status,
+        start_date,
+        excepted_end_date,
+        actual_start_date,
+        actual_end_date,
+        poc_type,
+        description,
+        spoc_email_address,
+        spoc_designation,
+        tag,
+        assigned_to,
+        created_by,
+        remarks,
+        estimated_efforts,
+        approved_by,
+        total_efforts,
+        partner_name,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        $1,$2,$3,$4,$5,$6,
+        $7,$8,$9,$10,
+        $11,$12,$13,$14,
+        $15,$16,$17,$18,
+        $19,$20,$21,$22,
+        NOW(), NOW()
+      )
+      RETURNING *;
+    `;
+
+    const values = [
+      poc_prj_name,          // $1
+      client_name,           // $2
+      partner_client_own,    // $3
+      sales_person,          // $4
+      region,                // $5
+      "Draft",               // $6
+      start_date,            // $7
+      excepted_end_date,     // $8
+      actual_start_date,     // $9
+      actual_end_date,       // $10
+      poc_type,              // $11
+      description,           // $12
+      spoc_email_address,    // $13
+      spoc_designation,      // $14
+      tag,                   // $15
+      assigned_to,           // $16
+      created_by,            // $17
+      remarks,               // $18
+      estimatedEfforts || null, // $19
+      approvedBy || null,       // $20
+      totalEfforts || null,     // $21
+      partner_name            // $22
+    ];
+
+    const result = await client.query(insertQuery, values);
+
+    await client.query("COMMIT");
+
+    res.status(201).json({
+      message: "POC saved successfully",
+      data: result.rows[0]
+    });
+
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error("Error saving POC:", err);
+    res.status(500).json({ message: "Internal server error" });
+  } finally {
+    client.release();
+  }
+});
+
+
+
+app.get("/poc/sales/getAllAssignTo", authenticateToken, async (req, res) => {
+  const { department_name } = req.query;
+  const role = req.user.role;
+
+  try {
+
+    let query = `
+      SELECT sr_no, emp_id, emp_name, email_id
+      FROM emp_details
+      WHERE status = 'Active'
+        AND emp_id NOT IN ('AE0007', 'AE0201', 'AE0751')
+    `;
+
+    const params = [];
+
+    // 🔐 Apply department filter ONLY for non-admin roles
+    if (!['ADMIN', 'Department Admin'].includes(role)) {
+      if (!department_name) {
+        return res.status(400).json({ message: "department_name is required" });
+      }
+      query += ` AND department_name = $1`;
+      params.push(department_name);
+    }
+
+    query += ` ORDER BY emp_name`;
+
+    const result = await pool.query(query, params);
+
+    const employees = result.rows.map(row => ({
+      id: row.sr_no,
+      empId: row.emp_id,
+      emp_name: row.emp_name,
+      email: row.email_id
+    }));
+
+    res.json(employees);
+
+  } catch (err) {
+    console.error("Error fetching assignTo list:", err);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+app.put("/poc/sales/updateStatus/:id", authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+
+    console.log("Update Status Request:", { id, status });
+
+    // 🔹 Validate required fields
+    if (!status) {
+      return res.status(400).json({ message: "Status is required" });
+    }
+
+    // 🔹 Validate allowed status values
+    const validStatuses = [
+      'Pending',
+      'In Progress',
+      'Completed',
+      'Dropped',
+      'Draft',
+      'Awaiting',
+      'Hold',
+      'Closed',
+      'Converted',
+      'Live'
+    ];
+
+    if (!validStatuses.includes(status)) {
+      return res.status(400).json({
+        message: "Invalid status value",
+        validStatuses
+      });
+    }
+
+    // 🔹 UPDATE correct table + updated_at
+    const updateQuery = `
+      UPDATE public.poc_prj_sales_details
+      SET
+        status = $1,
+        updated_at = NOW()
+      WHERE poc_prj_id::text = $2
+      RETURNING
+        poc_prj_id,
+        poc_prj_name,
+        status,
+        updated_at
+    `;
+
+    const result = await pool.query(updateQuery, [status, id]);
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "POC not found with ID: " + id
+      });
+    }
+
+    res.json({
+      success: true,
+      message: "Status updated successfully",
+      data: result.rows[0]
+    });
+
+  } catch (err) {
+    console.error("Error updating POC status:", err);
+    res.status(500).json({
+      success: false,
+      message: "Internal server error",
+      error: err.message
+    });
+  }
+});
+
+app.put('/poc/sales/updateRemark/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { remark } = req.body;
+
+    // Simple update without updated_at column
+    const updateQuery = `
+            UPDATE poc_prj_sales_details 
+            SET remarks = $1
+            WHERE poc_prj_id::text = $2
+            RETURNING poc_prj_id, poc_prj_name, remarks
+        `;
+
+    const result = await pool.query(updateQuery, [remark, id]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: "POC not found with ID: " + id });
+    }
+
+    res.json({
+      success: true,
+      message: "Remark updated successfully",
+      data: result.rows[0]
+    });
+
+  } catch (err) {
+    console.error("Error updating POC remark:", err);
+    res.status(500).json({
+      success: false,
+      message: "Internal server error",
+      error: err.message
+    });
+  }
+});
+app.delete("/poc/sales/delete/:id", authenticateToken, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { id } = req.params;
+
+    // Start transaction
+    await client.query("BEGIN");
+
+    // ✅ Delete ONLY from poc_prj_sales_details
+    const result = await client.query(
+      `DELETE FROM poc_prj_sales_details 
+       WHERE poc_prj_id::text = $1 
+       RETURNING *`,
+      [id]
+    );
+
+    if (result.rows.length === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ message: "POC not found in sales table" });
+    }
+
+    // Commit transaction
+    await client.query("COMMIT");
+
+    res.json({
+      message: "POC sales record deleted successfully",
+      deletedRecord: result.rows[0]
+    });
+
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error("Error deleting POC sales record:", err);
+    res.status(500).json({ message: "Internal server error" });
+  } finally {
+    client.release();
+  }
+});
+app.put("/poc/sales/update/:id", authenticateToken, async (req, res) => {
+  try {
+    // 🔹 POC ID must be INTEGER
+    const id = parseInt(req.params.id, 10);
+
+    if (isNaN(id)) {
+      return res.status(400).json({ message: "Invalid POC ID" });
+    }
+
+    const {
+      pocName,
+      entityName,
+      entityType,
+      salesPerson,
+      region,
+
+      status,
+      startDate,
+      endDate,
+      pocType,
+      description,
+      spocEmail,
+      spocDesignation,
+      tags,
+      assignedTo,
+      remark,
+      actualStartDate,
+      actualEndDate,
+      estimatedEfforts,
+      approvedBy,
+      totalEfforts,
+      partnerName
+    } = req.body;
+
+    // 🔹 Normalize billable (boolean or string)
+
+
+    const updateQuery = `
+      UPDATE public.poc_prj_sales_details
+      SET
+        poc_prj_name        = $1,
+        client_name         = $2,
+        partner_client_own  = $3,
+        sales_person        = $4,
+        region              = $5,
+        status              = $6,
+        start_date          = $7,
+        excepted_end_date   = $8,
+        poc_type            = $9,
+        description         = $10,
+        spoc_email_address  = $11,
+        spoc_designation    = $12,
+        tag                 = $13,
+        assigned_to         = $14,
+        remarks             = $15,
+        actual_start_date   = $16,
+        actual_end_date     = $17,
+        estimated_efforts   = $18,
+        approved_by         = $19,
+        total_efforts       = $20,
+        partner_name        = $21,
+        updated_at          = NOW()
+      WHERE poc_prj_id = $22
+      RETURNING *
+    `;
+
+    const values = [
+      pocName || null,
+      entityName || null,
+      entityType || null,
+      salesPerson || null,
+      region || null,
+      status || null,
+      startDate || null,
+      endDate || null,
+      pocType || null,
+      description || null,
+      spocEmail || null,
+      spocDesignation || null,
+      tags || null,
+      assignedTo || null,
+      remark || null,
+      actualStartDate || null,
+      actualEndDate || null,
+      estimatedEfforts || null,
+      approvedBy || null,
+      totalEfforts || null,
+      partnerName || null,
+      id
+    ];
+
+    const result = await pool.query(updateQuery, values);
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ message: "POC not found" });
+    }
+
+    res.json({
+      success: true,
+      message: "POC updated successfully",
+      poc: result.rows[0]
+    });
+
+  } catch (err) {
+    console.error("Error updating POC:", err);
+    res.status(500).json({
+      success: false,
+      message: "Internal server error"
+    });
+  }
+});
+
+app.get("/poc/sales/getUsecases", authenticateToken, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT
+        poc_prj_id            AS "pocId",
+        poc_prj_name          AS "pocName",
+        client_name           AS "clientName",
+        partner_client_own    AS "entityType",
+        sales_person          AS "salesPerson",
+        region,
+        status,
+        start_date            AS "startDate",
+        excepted_end_date     AS "endDate",
+        poc_type              AS "pocType",
+        description,
+        spoc_email_address    AS "spocEmail",
+        spoc_designation      AS "spocDesignation",
+        tag                   AS "tags",
+        assigned_to           AS "assignedTo",
+        created_by            AS "createdBy",
+        remarks               AS "remark",
+        estimated_efforts     AS "estimatedEfforts",
+        approved_by           AS "approvedBy",
+        total_efforts         AS "totalEfforts",
+        partner_name          AS "partnerName",
+        created_at            AS "createdAt",
+        updated_at            AS "updatedAt"
+      FROM public.poc_prj_sales_details
+     
+    `);
+    //   WHERE status = 'In Progress'
+    // ORDER BY poc_prj_name
+    // console.log(result.rows)
+    res.json(result.rows);
+
+  } catch (err) {
+    console.error("Error fetching usecases:", err);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+app.get("/poc/sales/getLeads", authenticateToken, async (req, res) => {
+  try {
+    const departmentName = req.user.department_name;
+
+    if (!departmentName) {
+      return res.status(400).json({
+        message: "Department not found in token"
+      });
+    }
+
+    console.log('Fetching leads for department:', departmentName);
+
+    const result = await pool.query(
+      `
+      SELECT
+        lead_name,
+        department_name,
+        employee_name
+      
+      FROM public.lead_details
+      WHERE
+        lead_status = 'Active'
+        AND department_name = $1
+      ORDER BY lead_name
+      `,
+      [departmentName]
+    );
+
+    console.log('Leads found:', result.rows.length);
+    console.log(result.rows)
+    res.json(result.rows);
+
+  } catch (err) {
+    console.error("Error fetching leads:", err);
+    res.status(500).json({
+      message: "Internal server error",
+      error: err.message
+    });
+  }
+});
+app.post("/poc/sales/saveDailyStatus", authenticateToken, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const {
+      date,
+      usecaseId,
+      leadIds,
+      status,
+      workingHours,
+      workingMinutes,
+      description,
+      employeeId,
+      employeeName,
+      usecaseName,
+      leadNames
+    } = req.body;
+
+    // 🔹 Build "HH:MM" string for hrs
+    const formattedHrs = `${String(workingHours || 0).padStart(2, "0")}:${String(workingMinutes || 0).padStart(2, "0")}`;
+
+    console.log("Formatted hrs:", formattedHrs);
+
+    await client.query("BEGIN");
+
+    const insertStatusQuery = `
+      INSERT INTO public.sales_daily_status (
+        emp_name, emp_id, poc_prj_id, poc_date,
+        status, hrs, leads_email, department_name
+      )
+      VALUES ($1,$2,$3,$4,$5,$6,$7,'PCS ROW')
+      RETURNING *;
+    `;
+
+    const result = await client.query(insertStatusQuery, [
+      employeeName,   // emp_name
+      employeeId,     // emp_id
+      usecaseId,      // poc_prj_id
+      date,           // poc_date
+      description,         // status
+      formattedHrs,   // hrs in HH:MM
+      leadIds         // leads_email (comma separated)
+    ]);
+
+    await client.query("COMMIT");
+
+    res.status(201).json({
+      message: "Daily POC status saved successfully",
+      data: result.rows[0]
+    });
+
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error("Error saving daily POC status:", err);
+    res.status(500).json({ message: "Internal server error" });
+  } finally {
+    client.release();
+  }
+});
+app.put("/poc/sales/empupdateStatus/:id", authenticateToken, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { id } = req.params;
+    const {
+      employeeName,
+      empName,
+      employeeId,
+      empId,
+      usecaseId,
+      pocPrjId,
+      date,
+      pocDate,
+      status,
+      workingHours,
+      workingMinutes,
+      leadIds,
+      description,
+      leadsEmail,
+      departmentName
+    } = req.body;
+
+    console.log("Update Daily Status Payload:", req.body);
+
+    // hrs -> HH:MM
+    const hrs = `${workingHours || "0"}:${workingMinutes || "00"}`;
+
+    await client.query("BEGIN");
+
+    const updateQuery = `
+      UPDATE public.sales_daily_status
+      SET poc_prj_id     = COALESCE($1, poc_prj_id),
+          poc_date       = COALESCE($2::date, poc_date),
+          status         = COALESCE($3, status),
+          hrs            = COALESCE($4, hrs),
+          leads_email    = COALESCE($5, leads_email),
+          department_name= COALESCE($6, department_name)
+      WHERE id = $7
+      RETURNING *;
+    `;
+
+    const result = await client.query(updateQuery, [
+      usecaseId ?? pocPrjId ?? null,
+      date ?? pocDate ?? null,
+      description ?? status ?? null,  // Use description from frontend, fallback to status
+      hrs ?? null,
+      leadIds ?? leadsEmail ?? null,
+      departmentName ?? null,
+      id
+    ]);
+
+    await client.query("COMMIT");
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: "Status not found" });
+    }
+
+    res.status(200).json({
+      message: "Daily POC status updated successfully",
+      data: result.rows[0]
+    });
+
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error("Error updating daily POC status:", err);
+    res.status(500).json({ message: "Internal server error" });
+  } finally {
+    client.release();
+  }
+});
+
+app.delete("/poc/sales/deleteStatus/:id", authenticateToken, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { id } = req.params;
+    console.log(id);
+    await client.query("BEGIN");
+
+    // Optional: check if the status exists
+    const checkResult = await client.query(
+      "SELECT * FROM public.sales_daily_status WHERE id = $1",
+      [id]
+    );
+
+    if (checkResult.rows.length === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ message: "Status not found" });
+    }
+
+    // Delete the status
+    const deleteResult = await client.query(
+      "DELETE FROM public.sales_daily_status WHERE id = $1 RETURNING *",
+      [id]
+    );
+
+    await client.query("COMMIT");
+
+    res.status(200).json({
+      message: "Daily POC status deleted successfully",
+      data: deleteResult.rows[0]
+    });
+
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error("Error deleting daily POC status:", err);
+    res.status(500).json({ message: "Internal server error" });
+  } finally {
+    client.release();
+  }
+});
+app.get("/poc/sales/getStatusByDate", authenticateToken, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { date } = req.query;
+    const employeeId = req.user.emp_id;
+
+    const permissionQuery = `
+      SELECT all_status_access 
+      FROM public.user_permissions 
+      WHERE emp_id = $1;
+    `;
+
+    const permissionResult = await client.query(permissionQuery, [employeeId]);
+    const hasAllStatusAccess = permissionResult.rows.length > 0 && permissionResult.rows[0].all_status_access === true;
+
+    let query;
+    let queryParams;
+
+    if (hasAllStatusAccess) {
+      query = `
+        SELECT 
+          id,
+          emp_name AS "employeeName",
+          emp_id AS "employeeId",
+          poc_prj_id AS "usecaseId",
+          poc_date AS "date",
+          status AS "description",
+          status,
+          hrs,
+          leads_email AS "leadIds",
+          department_name AS "departmentName"
+        FROM public.sales_daily_status
+        WHERE poc_date = $1
+        ORDER BY id DESC;
+      `;
+      queryParams = [date];
+    } else {
+      query = `
+        SELECT 
+          id,
+          emp_name AS "employeeName",
+          emp_id AS "employeeId",
+          poc_prj_id AS "usecaseId",
+          poc_date AS "date",
+          status AS "description",
+          status,
+          hrs,
+          leads_email AS "leadIds",
+          department_name AS "departmentName"
+        FROM public.sales_daily_status
+        WHERE poc_date = $1 AND emp_id = $2
+        ORDER BY id DESC;
+      `;
+      queryParams = [date, employeeId];
+    }
+
+    const result = await client.query(query, queryParams);
+
+    // ✅ Transform hrs ("HH:MM") → workingHours + workingMinutes
+    const formattedRows = result.rows.map((row) => {
+      let workingHours = 0;
+      let workingMinutes = 0;
+
+      if (row.hrs) {
+        const [h, m] = row.hrs.split(":");
+        workingHours = parseInt(h, 10);
+        workingMinutes = parseInt(m, 10);
+      }
+
+      // Get usecase name from usecases table or use the ID
+      const usecaseName = row.usecaseId; // You might want to join with usecases table to get the actual name
+
+      return {
+        id: row.id,
+        date: row.date,
+        usecaseName: usecaseName, // This should match what frontend expects
+        usecaseId: row.usecaseId,
+        leadName: row.leadNames || '',
+        leadIds: row.leadIds ? row.leadIds.split(",") : [],
+        status: row.status,
+        workingHours: workingHours,
+        workingMinutes: workingMinutes,
+        description: row.description || "",
+        employeeName: row.employeeName,
+        employeeId: row.employeeId,
+        departmentName: row.departmentName,
+        // Include permission info
+        hasAllStatusAccess: hasAllStatusAccess
+      };
+    });
+
+    res.json(formattedRows);
+  } catch (err) {
+    console.error("Error fetching status by date:", err);
+    res.status(500).json({ message: "Internal server error" });
+  } finally {
+    client.release();
+  }
+});
+
+
+
+
+
+// Admin tab apis 
+
+
+// In your server.js file
+app.get('/poc/admin/getAllUsers', authenticateToken, async (req, res) => {
+  try {
+    // Verify admin access (you can add additional admin check here)
+    const user = req.user;
+
+    // Query to get all users from emp_details table
+    const query = `
+            SELECT 
+                sr_no,
+                emp_id,
+                emp_name,
+                email_id,
+                status,
+                department_name,
+                role,
+                password
+            FROM emp_details
+            Where emp_id NOT IN ('AE0204')
+            ORDER BY department_name, emp_name
+        `;
+
+    const result = await pool.query(query);
+
+    // Return the users data (excluding password for security)
+    const users = result.rows.map(user => ({
+      sr_no: user.sr_no,
+      emp_id: user.emp_id,
+      emp_name: user.emp_name,
+      email_id: user.email_id,
+      status: user.status || 'Active',
+      department_name: user.department_name,
+      role: user.role || 'User'
+      // Note: password is not included in the response
+    }));
+
+    res.json(users);
+  } catch (error) {
+    console.error('Error fetching users:', error);
+    res.status(500).json({ error: 'Failed to fetch users' });
+  }
+});
+
+// Add new user
+app.post('/poc/admin/createUser', authenticateToken, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const { emp_id, emp_name, email_id, status, department_name, role, password } = req.body;
+
+    // Validate required fields
+    if (!emp_id || !emp_name || !email_id || !password) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Employee ID, Name, Email, and Password are required' });
+    }
+
+    // Check if user already exists
+    const checkQuery = 'SELECT emp_id FROM emp_details WHERE emp_id = $1 OR email_id = $2';
+    const checkResult = await client.query(checkQuery, [emp_id, email_id]);
+
+    if (checkResult.rowCount > 0) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: 'Employee ID or Email already exists' });
+    }
+
+    // Insert new user into emp_details
+    const insertUserQuery = `
+      INSERT INTO emp_details 
+      (emp_id, emp_name, email_id, status, department_name, role, password)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      RETURNING emp_id, emp_name, email_id, status, department_name, role
+    `;
+
+    const userValues = [
+      emp_id,
+      emp_name,
+      email_id,
+      status || 'Active',
+      department_name,
+      role || 'Employee',
+      password
+    ];
+
+    const userResult = await client.query(insertUserQuery, userValues);
+
+    // Insert default permissions into user_permissions (all false)
+    const insertPermissionsQuery = `
+      INSERT INTO user_permissions 
+      (
+        emp_id, 
+        dashboard_access, 
+        report_access, 
+        usecase_creation_access, 
+        status_access, 
+        sales_access,
+        all_status_access,
+        sales_admin,
+        sales_dashboard_access,
+        status_status_access,
+        leave_access,
+        all_sales_access,
+        admin_access
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+      RETURNING emp_id
+    `;
+
+    const permissionValues = [
+      emp_id,                    // $1
+      false,                     // $2 dashboard_access
+      false,                     // $3 report_access
+      false,                     // $4 usecase_creation_access
+      false,                     // $5 status_access
+      false,                     // $6 sales_access
+      false,                     // $7 all_status_access
+      false,                     // $8 sales_admin
+      false,                     // $9 sales_dashboard_access
+      false,                     // $10 status_status_access
+      false,                     // $11 leave_access
+      false,                     // $12 all_sales_access
+      false                      // $13 admin_access
+    ];
+
+    await client.query(insertPermissionsQuery, permissionValues);
+
+    await client.query('COMMIT');
+
+    res.status(201).json({
+      success: true,
+      message: 'User created successfully with default permissions',
+      user: userResult.rows[0]
+    });
+
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('Error creating user:', error);
+
+    if (error.code === '23505') {
+      return res.status(409).json({
+        error: 'Permissions record already exists or duplicate key',
+        details: error.detail
+      });
+    }
+
+    res.status(500).json({ error: 'Failed to create user' });
+  } finally {
+    client.release();
+  }
+});
+
+// Update existing user
+app.put('/poc/admin/updateUser', authenticateToken, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const { emp_id, emp_name, email_id, status, department_name, role, password } = req.body;
+
+    // Validate required fields
+    if (!emp_id) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Employee ID is required' });
+    }
+
+    // Check if user exists
+    const checkQuery = 'SELECT emp_id FROM emp_details WHERE emp_id = $1';
+    const checkResult = await client.query(checkQuery, [emp_id]);
+
+    if (checkResult.rowCount === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Build dynamic update query
+    let updateFields = [];
+    let values = [];
+    let paramCount = 1;
+
+    if (emp_name) {
+      updateFields.push(`emp_name = $${paramCount}`);
+      values.push(emp_name);
+      paramCount++;
+    }
+
+    if (email_id) {
+      updateFields.push(`email_id = $${paramCount}`);
+      values.push(email_id);
+      paramCount++;
+    }
+
+    if (status) {
+      updateFields.push(`status = $${paramCount}`);
+      values.push(status);
+      paramCount++;
+    }
+
+    if (department_name) {
+      updateFields.push(`department_name = $${paramCount}`);
+      values.push(department_name);
+      paramCount++;
+    }
+
+    if (role) {
+      updateFields.push(`role = $${paramCount}`);
+      values.push(role);
+      paramCount++;
+    }
+
+    if (password) {
+      updateFields.push(`password = $${paramCount}`);
+      values.push(password);
+      paramCount++;
+    }
+
+    if (updateFields.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'No fields to update' });
+    }
+
+    // Add emp_id as last parameter
+    values.push(emp_id);
+
+    const updateQuery = `
+      UPDATE emp_details 
+      SET ${updateFields.join(', ')}
+      WHERE emp_id = $${paramCount}
+      RETURNING emp_id, emp_name, email_id, status, department_name, role
+    `;
+
+    const result = await client.query(updateQuery, values);
+
+    // Check and create permissions using ON CONFLICT DO NOTHING
+    const insertPermissionsQuery = `
+      INSERT INTO user_permissions 
+      (
+        emp_id, 
+        dashboard_access, 
+        report_access, 
+        usecase_creation_access, 
+        status_access, 
+        sales_access,
+        all_status_access,
+        sales_admin,
+        sales_dashboard_access,
+        status_status_access,
+        leave_access,
+        all_sales_access,
+        admin_access
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+      ON CONFLICT (emp_id) DO NOTHING
+      RETURNING emp_id
+    `;
+
+    const permissionValues = [
+      emp_id,
+      false, false, false, false, false,
+      false, false, false, false, false, false, false
+    ];
+
+    await client.query(insertPermissionsQuery, permissionValues);
+
+    await client.query('COMMIT');
+
+    res.json({
+      success: true,
+      message: 'User updated successfully',
+      user: result.rows[0]
+    });
+
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('Error updating user:', error);
+
+    // More specific error handling
+    if (error.code === '23505') {
+      return res.status(409).json({
+        error: 'Permissions record already exists for this user'
+      });
+    }
+
+    res.status(500).json({ error: 'Failed to update user' });
+  } finally {
+    client.release();
+  }
+});
+
+// Add this API endpoint in your server.js
+app.post('/poc/admin/updateUserStatus', authenticateToken, async (req, res) => {
+  try {
+    const { emp_id, status } = req.body;
+
+    if (!emp_id || !status) {
+      return res.status(400).json({ error: 'Employee ID and status are required' });
+    }
+
+    const validStatuses = ['Active', 'Inactive'];
+    if (!validStatuses.includes(status)) {
+      return res.status(400).json({ error: 'Invalid status value' });
+    }
+
+    const query = `
+            UPDATE emp_details 
+            SET status = $1 
+            WHERE emp_id = $2 
+            RETURNING emp_id, emp_name, status
+        `;
+
+    const result = await pool.query(query, [status, emp_id]);
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    res.json({
+      success: true,
+      message: `User status updated to ${status}`,
+      user: result.rows[0]
+    });
+
+  } catch (error) {
+    console.error('Error updating user status:', error);
+    res.status(500).json({ error: 'Failed to update user status' });
+  }
+});
+
+// In your backend (Node.js/Express example)
+app.get('/poc/admin/getUserPermissions/:empId', authenticateToken, async (req, res) => {
+  try {
+    const { empId } = req.params;
+
+    // Query the user_permissions table
+    const result = await pool.query(
+      'SELECT * FROM user_permissions WHERE emp_id = $1',
+      [empId]
+    );
+
+    if (result.rows.length === 0) {
+      // Return default permissions if no record exists
+      return res.json({
+        status_access: false,
+        report_access: false,
+        usecase_creation_access: false,
+        all_status_access: false,
+        sales_access: false,
+        sales_admin: false,
+        status_status_access: false,
+        sales_dashboard_access: false,
+        all_sales_access: false,
+      });
+    }
+
+    // Return the existing permissions
+    const permissions = result.rows[0];
+    res.json({
+      status_access: permissions.status_access || false,
+      report_access: permissions.report_access || false,
+      usecase_creation_access: permissions.usecase_creation_access || false,
+      all_status_access: permissions.all_status_access || false,
+      sales_access: permissions.sales_access || false,
+      sales_admin: permissions.sales_admin || false,
+      status_status_access: permissions.status_status_access || false,
+      sales_dashboard_access: permissions.sales_dashboard_access || false,
+      all_sales_access: permissions.all_sales_access || false,
+    });
+
+  } catch (error) {
+    console.error('Error fetching user permissions:', error);
+    res.status(500).json({ error: 'Failed to fetch user permissions' });
+  }
+});
+
+// In your backend (Node.js/Express example)
+app.post('/poc/admin/updateUserPermissions', authenticateToken, async (req, res) => {
+  try {
+    const {
+      emp_id,
+      status_access,
+      report_access,
+      usecase_creation_access,
+      all_status_access,
+      sales_access,
+      sales_admin,
+      status_status_access,
+      sales_dashboard_access,
+      all_sales_access
+    } = req.body;
+
+    // Check if permission record exists for this user
+    const checkResult = await pool.query(
+      'SELECT id FROM user_permissions WHERE emp_id = $1',
+      [emp_id]
+    );
+
+    if (checkResult.rows.length === 0) {
+      // Insert new record
+      await pool.query(
+        `INSERT INTO user_permissions 
+                (emp_id, status_access, report_access, usecase_creation_access, 
+                 all_status_access, sales_access, sales_admin, status_status_access, 
+                 sales_dashboard_access, all_sales_access)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+        [
+          emp_id,
+          status_access,
+          report_access,
+          usecase_creation_access,
+          all_status_access,
+          sales_access,
+          sales_admin,
+          status_status_access,
+          sales_dashboard_access,
+          all_sales_access
+        ]
+      );
+    } else {
+      // Update existing record
+      await pool.query(
+        `UPDATE user_permissions 
+                SET status_access = $2,
+                    report_access = $3,
+                    usecase_creation_access = $4,
+                    all_status_access = $5,
+                    sales_access = $6,
+                    sales_admin = $7,
+                    status_status_access = $8,
+                    sales_dashboard_access = $9,
+                    all_sales_access = $10,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE emp_id = $1`,
+        [
+          emp_id,
+          status_access,
+          report_access,
+          usecase_creation_access,
+          all_status_access,
+          sales_access,
+          sales_admin,
+          status_status_access,
+          sales_dashboard_access,
+          all_sales_access
+        ]
+      );
+    }
+
+    res.json({ success: true, message: 'Permissions updated successfully' });
+
+  } catch (error) {
+    console.error('Error updating user permissions:', error);
+    res.status(500).json({ error: 'Failed to update user permissions' });
+  }
+});
 
 
 
