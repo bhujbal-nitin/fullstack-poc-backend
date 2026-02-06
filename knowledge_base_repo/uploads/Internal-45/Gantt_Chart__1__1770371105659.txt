@@ -1,0 +1,361 @@
+?? Summary: React Gantt Options & Pricing
+
+Library	React Support		Pricing Range	License Type
+
+Bryntum React Gantt		~$680+ one-time	Commercial
+KendoReact Gantt		~$899–$1,399/year	Commercial
+DevExtreme React Gantt		~$900+/year	Commercial
+Smart React UI Gantt		~$399+/developer	Commercial
+
+
+
+---------------------------
+Alert
+---------------------------
+Wed Feb 04 2026 14:42:39 GMT+0530 (IST)
+---------------------------
+OK   Cancel   
+---------------------------
+
+
+
+
+SELECT 
+    ROW_NUMBER() OVER (ORDER BY u.emp_code) AS "Sr. No.",
+    u.emp_code AS "Employee Code",
+    CONCAT(u.first_name, ' ', u.last_name) AS "Full Name",
+    COALESCE(p."2026-01-01", '00.00') AS "01 Jan",
+    COALESCE(p."2026-01-02", '00.00') AS "02 Jan",
+    COALESCE(p."2026-01-03", '00.00') AS "03 Jan",
+    COALESCE(p."2026-01-04", '00.00') AS "04 Jan",
+    COALESCE(p."2026-01-05", '00.00') AS "05 Jan",
+    COALESCE(p."2026-01-06", '00.00') AS "06 Jan",
+    COALESCE(p."2026-01-07", '00.00') AS "07 Jan",
+    COALESCE(p."2026-01-08", '00.00') AS "08 Jan",
+    COALESCE(p."2026-01-09", '00.00') AS "09 Jan",
+    COALESCE(p."2026-01-10", '00.00') AS "10 Jan",
+    COALESCE(p."2026-01-11", '00.00') AS "11 Jan",
+    COALESCE(p."2026-01-12", '00.00') AS "12 Jan",
+    COALESCE(p."2026-01-13", '00.00') AS "13 Jan",
+    COALESCE(p."2026-01-14", '00.00') AS "14 Jan",
+    COALESCE(p."2026-01-15", '00.00') AS "15 Jan",
+    COALESCE(p."2026-01-16", '00.00') AS "16 Jan",
+    COALESCE(p."2026-01-17", '00.00') AS "17 Jan",
+    COALESCE(p."2026-01-18", '00.00') AS "18 Jan",
+    COALESCE(p."2026-01-19", '00.00') AS "19 Jan",
+    COALESCE(p."2026-01-20", '00.00') AS "20 Jan",
+    COALESCE(p."2026-01-21", '00.00') AS "21 Jan",
+    COALESCE(p."2026-01-22", '00.00') AS "22 Jan",
+    COALESCE(p."2026-01-23", '00.00') AS "23 Jan",
+    COALESCE(p."2026-01-24", '00.00') AS "24 Jan",
+    COALESCE(p."2026-01-25", '00.00') AS "25 Jan",
+    COALESCE(p."2026-01-26", '00.00') AS "26 Jan",
+    COALESCE(p."2026-01-27", '00.00') AS "27 Jan",
+    COALESCE(p."2026-01-28", '00.00') AS "28 Jan",
+    COALESCE(p."2026-01-29", '00.00') AS "29 Jan",
+    COALESCE(p."2026-01-30", '00.00') AS "30 Jan",
+    COALESCE(p."2026-01-31", '00.00') AS "31 Jan",
+    COALESCE(p."Total", '00.00') AS "Total"
+FROM (
+    SELECT DISTINCT ON (u.user_id)
+        ut.user_id,
+        u.emp_code,     
+        u.first_name,
+        u.last_name,
+        u.email
+    FROM user_teams ut
+    INNER JOIN public.teams t ON ut.team_id = t.team_id
+    INNER JOIN public.users u ON ut.user_id = u.user_id
+    WHERE (
+        t.team_name ILIKE '%USA%' 
+        OR t.team_name ILIKE '%US HealthCare%'  
+        OR t.team_name ILIKE 'ravindra.badar@automationedge.com'
+    )
+    AND u.user_id NOT IN (
+        513, 445, 153, 144,  33, 102, 104, 386, 164, 113, 
+        190, 632, 672, 673, 156, 160, 110, 170, 164, 
+        172, 199, 189, 190, 558, 205,  92, 94, 240,  171,
+        316, 711, 745, 425, 465, 744, 685, 705
+    )
+    AND LOWER(u.state) = LOWER('active')
+) u
+LEFT JOIN (
+    SELECT 
+        *,
+        TO_CHAR(FLOOR(total_minutes / 60)::int, 'FM00') || '.' ||
+        LPAD((total_minutes % 60)::int::text, 2, '0') AS "Total"
+    FROM (
+        SELECT 
+            user_id,
+            "2026-01-01",
+            "2026-01-02",
+            "2026-01-03",
+            "2026-01-04",
+            "2026-01-05",
+            "2026-01-06",
+            "2026-01-07",
+            "2026-01-08",
+            "2026-01-09",
+            "2026-01-10",
+            "2026-01-11",
+            "2026-01-12",
+            "2026-01-13",
+            "2026-01-14",
+            "2026-01-15",
+            "2026-01-16",
+            "2026-01-17",
+            "2026-01-18",
+            "2026-01-19",
+            "2026-01-20",
+            "2026-01-21",
+            "2026-01-22",
+            "2026-01-23",
+            "2026-01-24",
+            "2026-01-25",
+            "2026-01-26",
+            "2026-01-27",
+            "2026-01-28",
+            "2026-01-29",
+            "2026-01-30",
+            "2026-01-31",
+            (
+                COALESCE(CASE WHEN "2026-01-01" ~ '^[0-9]+\.[0-9]{2}$' THEN split_part("2026-01-01", '.', 1)::int * 60 + split_part("2026-01-01", '.', 2)::int ELSE 0 END, 0) +
+                COALESCE(CASE WHEN "2026-01-02" ~ '^[0-9]+\.[0-9]{2}$' THEN split_part("2026-01-02", '.', 1)::int * 60 + split_part("2026-01-02", '.', 2)::int ELSE 0 END, 0) +
+                COALESCE(CASE WHEN "2026-01-03" ~ '^[0-9]+\.[0-9]{2}$' THEN split_part("2026-01-03", '.', 1)::int * 60 + split_part("2026-01-03", '.', 2)::int ELSE 0 END, 0) +
+                COALESCE(CASE WHEN "2026-01-04" ~ '^[0-9]+\.[0-9]{2}$' THEN split_part("2026-01-04", '.', 1)::int * 60 + split_part("2026-01-04", '.', 2)::int ELSE 0 END, 0) +
+                COALESCE(CASE WHEN "2026-01-05" ~ '^[0-9]+\.[0-9]{2}$' THEN split_part("2026-01-05", '.', 1)::int * 60 + split_part("2026-01-05", '.', 2)::int ELSE 0 END, 0) +
+                COALESCE(CASE WHEN "2026-01-06" ~ '^[0-9]+\.[0-9]{2}$' THEN split_part("2026-01-06", '.', 1)::int * 60 + split_part("2026-01-06", '.', 2)::int ELSE 0 END, 0) +
+                COALESCE(CASE WHEN "2026-01-07" ~ '^[0-9]+\.[0-9]{2}$' THEN split_part("2026-01-07", '.', 1)::int * 60 + split_part("2026-01-07", '.', 2)::int ELSE 0 END, 0) +
+                COALESCE(CASE WHEN "2026-01-08" ~ '^[0-9]+\.[0-9]{2}$' THEN split_part("2026-01-08", '.', 1)::int * 60 + split_part("2026-01-08", '.', 2)::int ELSE 0 END, 0) +
+                COALESCE(CASE WHEN "2026-01-09" ~ '^[0-9]+\.[0-9]{2}$' THEN split_part("2026-01-09", '.', 1)::int * 60 + split_part("2026-01-09", '.', 2)::int ELSE 0 END, 0) +
+                COALESCE(CASE WHEN "2026-01-10" ~ '^[0-9]+\.[0-9]{2}$' THEN split_part("2026-01-10", '.', 1)::int * 60 + split_part("2026-01-10", '.', 2)::int ELSE 0 END, 0) +
+                COALESCE(CASE WHEN "2026-01-11" ~ '^[0-9]+\.[0-9]{2}$' THEN split_part("2026-01-11", '.', 1)::int * 60 + split_part("2026-01-11", '.', 2)::int ELSE 0 END, 0) +
+                COALESCE(CASE WHEN "2026-01-12" ~ '^[0-9]+\.[0-9]{2}$' THEN split_part("2026-01-12", '.', 1)::int * 60 + split_part("2026-01-12", '.', 2)::int ELSE 0 END, 0) +
+                COALESCE(CASE WHEN "2026-01-13" ~ '^[0-9]+\.[0-9]{2}$' THEN split_part("2026-01-13", '.', 1)::int * 60 + split_part("2026-01-13", '.', 2)::int ELSE 0 END, 0) +
+                COALESCE(CASE WHEN "2026-01-14" ~ '^[0-9]+\.[0-9]{2}$' THEN split_part("2026-01-14", '.', 1)::int * 60 + split_part("2026-01-14", '.', 2)::int ELSE 0 END, 0) +
+                COALESCE(CASE WHEN "2026-01-15" ~ '^[0-9]+\.[0-9]{2}$' THEN split_part("2026-01-15", '.', 1)::int * 60 + split_part("2026-01-15", '.', 2)::int ELSE 0 END, 0) +
+                COALESCE(CASE WHEN "2026-01-16" ~ '^[0-9]+\.[0-9]{2}$' THEN split_part("2026-01-16", '.', 1)::int * 60 + split_part("2026-01-16", '.', 2)::int ELSE 0 END, 0) +
+                COALESCE(CASE WHEN "2026-01-17" ~ '^[0-9]+\.[0-9]{2}$' THEN split_part("2026-01-17", '.', 1)::int * 60 + split_part("2026-01-17", '.', 2)::int ELSE 0 END, 0) +
+                COALESCE(CASE WHEN "2026-01-18" ~ '^[0-9]+\.[0-9]{2}$' THEN split_part("2026-01-18", '.', 1)::int * 60 + split_part("2026-01-18", '.', 2)::int ELSE 0 END, 0) +
+                COALESCE(CASE WHEN "2026-01-19" ~ '^[0-9]+\.[0-9]{2}$' THEN split_part("2026-01-19", '.', 1)::int * 60 + split_part("2026-01-19", '.', 2)::int ELSE 0 END, 0) +
+                COALESCE(CASE WHEN "2026-01-20" ~ '^[0-9]+\.[0-9]{2}$' THEN split_part("2026-01-20", '.', 1)::int * 60 + split_part("2026-01-20", '.', 2)::int ELSE 0 END, 0) +
+                COALESCE(CASE WHEN "2026-01-21" ~ '^[0-9]+\.[0-9]{2}$' THEN split_part("2026-01-21", '.', 1)::int * 60 + split_part("2026-01-21", '.', 2)::int ELSE 0 END, 0) +
+                COALESCE(CASE WHEN "2026-01-22" ~ '^[0-9]+\.[0-9]{2}$' THEN split_part("2026-01-22", '.', 1)::int * 60 + split_part("2026-01-22", '.', 2)::int ELSE 0 END, 0) +
+                COALESCE(CASE WHEN "2026-01-23" ~ '^[0-9]+\.[0-9]{2}$' THEN split_part("2026-01-23", '.', 1)::int * 60 + split_part("2026-01-23", '.', 2)::int ELSE 0 END, 0) +
+                COALESCE(CASE WHEN "2026-01-24" ~ '^[0-9]+\.[0-9]{2}$' THEN split_part("2026-01-24", '.', 1)::int * 60 + split_part("2026-01-24", '.', 2)::int ELSE 0 END, 0) +
+                COALESCE(CASE WHEN "2026-01-25" ~ '^[0-9]+\.[0-9]{2}$' THEN split_part("2026-01-25", '.', 1)::int * 60 + split_part("2026-01-25", '.', 2)::int ELSE 0 END, 0) +
+                COALESCE(CASE WHEN "2026-01-26" ~ '^[0-9]+\.[0-9]{2}$' THEN split_part("2026-01-26", '.', 1)::int * 60 + split_part("2026-01-26", '.', 2)::int ELSE 0 END, 0) +
+                COALESCE(CASE WHEN "2026-01-27" ~ '^[0-9]+\.[0-9]{2}$' THEN split_part("2026-01-27", '.', 1)::int * 60 + split_part("2026-01-27", '.', 2)::int ELSE 0 END, 0) +
+                COALESCE(CASE WHEN "2026-01-28" ~ '^[0-9]+\.[0-9]{2}$' THEN split_part("2026-01-28", '.', 1)::int * 60 + split_part("2026-01-28", '.', 2)::int ELSE 0 END, 0) +
+                COALESCE(CASE WHEN "2026-01-29" ~ '^[0-9]+\.[0-9]{2}$' THEN split_part("2026-01-29", '.', 1)::int * 60 + split_part("2026-01-29", '.', 2)::int ELSE 0 END, 0) +
+                COALESCE(CASE WHEN "2026-01-30" ~ '^[0-9]+\.[0-9]{2}$' THEN split_part("2026-01-30", '.', 1)::int * 60 + split_part("2026-01-30", '.', 2)::int ELSE 0 END, 0) +
+                COALESCE(CASE WHEN "2026-01-31" ~ '^[0-9]+\.[0-9]{2}$' THEN split_part("2026-01-31", '.', 1)::int * 60 + split_part("2026-01-31", '.', 2)::int ELSE 0 END, 0)
+            ) AS total_minutes
+        FROM crosstab(
+            'SELECT 
+                user_id,
+                TO_CHAR(created_at::date, ''YYYY-MM-DD'') AS work_date,
+                TO_CHAR(FLOOR(total_hrs_decimal)::int, ''FM00'') || ''.'' ||
+                LPAD(FLOOR((total_hrs_decimal - FLOOR(total_hrs_decimal)) * 60)::int::text, 2, ''0'') AS hrs_hhmm
+            FROM (
+                SELECT 
+                    user_id, 
+                    created_at::date,
+                    SUM(
+                        CASE 
+                            WHEN total_hours IS NULL OR trim(total_hours) = '''' THEN 0
+                            ELSE
+                                COALESCE(
+                                    CASE WHEN split_part(total_hours, '':'', 1) ~ ''^[0-9]+$'' 
+                                         THEN split_part(total_hours, '':'', 1)::numeric ELSE 0 END, 0
+                                ) +
+                                COALESCE(
+                                    CASE WHEN split_part(total_hours, '':'', 2) ~ ''^[0-9]+$'' 
+                                         THEN split_part(total_hours, '':'', 2)::numeric ELSE 0 END, 0
+                                ) / 60 +
+                                COALESCE(
+                                    CASE WHEN split_part(total_hours, '':'', 3) ~ ''^[0-9]+$'' 
+                                         THEN split_part(total_hours, '':'', 3)::numeric ELSE 0 END, 0
+                                ) / 3600
+                        END
+                    ) AS total_hrs_decimal
+                FROM public.employee_status
+                WHERE created_at >= ''2026-01-01''
+                  AND created_at < ''2026-02-01''
+                GROUP BY user_id, created_at::date
+            ) AS raw_data
+            ORDER BY user_id, work_date'::text,
+            
+            'VALUES 
+                (''2026-01-01''), (''2026-01-02''), (''2026-01-03''), (''2026-01-04''), (''2026-01-05''),
+                (''2026-01-06''), (''2026-01-07''), (''2026-01-08''), (''2026-01-09''), (''2026-01-10''),
+                (''2026-01-11''), (''2026-01-12''), (''2026-01-13''), (''2026-01-14''), (''2026-01-15''),
+                (''2026-01-16''), (''2026-01-17''), (''2026-01-18''), (''2026-01-19''), (''2026-01-20''),
+                (''2026-01-21''), (''2026-01-22''), (''2026-01-23''), (''2026-01-24''), (''2026-01-25''),
+                (''2026-01-26''), (''2026-01-27''), (''2026-01-28''), (''2026-01-29''), (''2026-01-30''),
+                (''2026-01-31'')'::text
+        ) AS pivoted (
+            user_id INT,
+            "2026-01-01" TEXT, "2026-01-02" TEXT, "2026-01-03" TEXT, "2026-01-04" TEXT, "2026-01-05" TEXT,
+            "2026-01-06" TEXT, "2026-01-07" TEXT, "2026-01-08" TEXT, "2026-01-09" TEXT, "2026-01-10" TEXT,
+            "2026-01-11" TEXT, "2026-01-12" TEXT, "2026-01-13" TEXT, "2026-01-14" TEXT, "2026-01-15" TEXT,
+            "2026-01-16" TEXT, "2026-01-17" TEXT, "2026-01-18" TEXT, "2026-01-19" TEXT, "2026-01-20" TEXT,
+            "2026-01-21" TEXT, "2026-01-22" TEXT, "2026-01-23" TEXT, "2026-01-24" TEXT, "2026-01-25" TEXT,
+            "2026-01-26" TEXT, "2026-01-27" TEXT, "2026-01-28" TEXT, "2026-01-29" TEXT, "2026-01-30" TEXT,
+            "2026-01-31" TEXT
+        )
+    ) AS final_result
+) p ON u.user_id = p.user_id
+ORDER BY u.emp_code;
+
+
+
+client name | usecase name | 1 Jan | 2Jan |........| 31 Jan |
+----------------------------------------------------------------
+
+
+FInal Query
+
+
+WITH filtered_users AS (
+    SELECT DISTINCT u.user_id
+    FROM user_teams ut
+    JOIN teams t ON ut.team_id = t.team_id
+    JOIN users u ON ut.user_id = u.user_id
+    WHERE (
+        t.team_name ILIKE '%USA%'
+        OR t.team_name ILIKE '%US HealthCare%'
+        OR t.team_name ILIKE 'ravindra.badar@automationedge.com'
+    )
+    AND LOWER(u.state) = 'active'
+),
+
+seconds_data AS (
+    SELECT
+        es.user_id,
+        tm.usecase_id,
+        es.created_at::date AS work_date,
+
+        /* ?? Convert EVERYTHING to seconds safely */
+        CASE
+            WHEN es.total_hours ~ ':' THEN
+                COALESCE(NULLIF(split_part(es.total_hours, ':', 1), '')::int, 0) * 3600 +
+                COALESCE(NULLIF(split_part(es.total_hours, ':', 2), '')::int, 0) * 60 +
+                COALESCE(NULLIF(LEFT(split_part(es.total_hours, ':', 3), 2), '')::int, 0)
+
+            WHEN es.total_hours ~ '^[0-9]+(\.[0-9]+)?$' THEN
+                ROUND(es.total_hours::numeric * 3600)
+
+            ELSE 0
+        END AS seconds
+    FROM employee_status es
+    JOIN tasks_master tm ON es.task_id = tm.task_id
+    WHERE es.created_at >= '2026-01-01'
+      AND es.created_at <  '2026-02-01'
+      AND es.user_id IN (SELECT user_id FROM filtered_users)
+),
+
+daily_seconds AS (
+    SELECT
+        c.client_name,
+        uc.usecase_name,
+        work_date,
+        SUM(seconds) AS day_seconds
+    FROM seconds_data sd
+    JOIN usecases uc ON sd.usecase_id = uc.usecase_id
+    JOIN clients c ON uc.client_id = c.client_id
+    GROUP BY c.client_name, uc.usecase_name, work_date
+),
+
+pivoted AS (
+    SELECT
+        client_name,
+        usecase_name,
+
+        /* ?? 01–31 Jan in SECONDS */
+        SUM(CASE WHEN work_date = '2026-01-01' THEN day_seconds ELSE 0 END) AS d01,
+        SUM(CASE WHEN work_date = '2026-01-02' THEN day_seconds ELSE 0 END) AS d02,
+        SUM(CASE WHEN work_date = '2026-01-03' THEN day_seconds ELSE 0 END) AS d03,
+        SUM(CASE WHEN work_date = '2026-01-04' THEN day_seconds ELSE 0 END) AS d04,
+        SUM(CASE WHEN work_date = '2026-01-05' THEN day_seconds ELSE 0 END) AS d05,
+        SUM(CASE WHEN work_date = '2026-01-06' THEN day_seconds ELSE 0 END) AS d06,
+        SUM(CASE WHEN work_date = '2026-01-07' THEN day_seconds ELSE 0 END) AS d07,
+        SUM(CASE WHEN work_date = '2026-01-08' THEN day_seconds ELSE 0 END) AS d08,
+        SUM(CASE WHEN work_date = '2026-01-09' THEN day_seconds ELSE 0 END) AS d09,
+        SUM(CASE WHEN work_date = '2026-01-10' THEN day_seconds ELSE 0 END) AS d10,
+        SUM(CASE WHEN work_date = '2026-01-11' THEN day_seconds ELSE 0 END) AS d11,
+        SUM(CASE WHEN work_date = '2026-01-12' THEN day_seconds ELSE 0 END) AS d12,
+        SUM(CASE WHEN work_date = '2026-01-13' THEN day_seconds ELSE 0 END) AS d13,
+        SUM(CASE WHEN work_date = '2026-01-14' THEN day_seconds ELSE 0 END) AS d14,
+        SUM(CASE WHEN work_date = '2026-01-15' THEN day_seconds ELSE 0 END) AS d15,
+        SUM(CASE WHEN work_date = '2026-01-16' THEN day_seconds ELSE 0 END) AS d16,
+        SUM(CASE WHEN work_date = '2026-01-17' THEN day_seconds ELSE 0 END) AS d17,
+        SUM(CASE WHEN work_date = '2026-01-18' THEN day_seconds ELSE 0 END) AS d18,
+        SUM(CASE WHEN work_date = '2026-01-19' THEN day_seconds ELSE 0 END) AS d19,
+        SUM(CASE WHEN work_date = '2026-01-20' THEN day_seconds ELSE 0 END) AS d20,
+        SUM(CASE WHEN work_date = '2026-01-21' THEN day_seconds ELSE 0 END) AS d21,
+        SUM(CASE WHEN work_date = '2026-01-22' THEN day_seconds ELSE 0 END) AS d22,
+        SUM(CASE WHEN work_date = '2026-01-23' THEN day_seconds ELSE 0 END) AS d23,
+        SUM(CASE WHEN work_date = '2026-01-24' THEN day_seconds ELSE 0 END) AS d24,
+        SUM(CASE WHEN work_date = '2026-01-25' THEN day_seconds ELSE 0 END) AS d25,
+        SUM(CASE WHEN work_date = '2026-01-26' THEN day_seconds ELSE 0 END) AS d26,
+        SUM(CASE WHEN work_date = '2026-01-27' THEN day_seconds ELSE 0 END) AS d27,
+        SUM(CASE WHEN work_date = '2026-01-28' THEN day_seconds ELSE 0 END) AS d28,
+        SUM(CASE WHEN work_date = '2026-01-29' THEN day_seconds ELSE 0 END) AS d29,
+        SUM(CASE WHEN work_date = '2026-01-30' THEN day_seconds ELSE 0 END) AS d30,
+        SUM(CASE WHEN work_date = '2026-01-31' THEN day_seconds ELSE 0 END) AS d31,
+
+        SUM(day_seconds) AS total_seconds
+    FROM daily_seconds
+    GROUP BY client_name, usecase_name
+)
+
+SELECT
+    ROW_NUMBER() OVER () AS "Sr. No.",
+    client_name AS "Client Name",
+    usecase_name AS "Usecase Name",
+
+    /* ?? Format ONLY HERE */
+    to_char(make_interval(secs => d01), 'HH24:MI') AS "01 Jan",
+    to_char(make_interval(secs => d02), 'HH24:MI') AS "02 Jan",
+    to_char(make_interval(secs => d03), 'HH24:MI') AS "03 Jan",
+    to_char(make_interval(secs => d04), 'HH24:MI') AS "04 Jan",
+    to_char(make_interval(secs => d05), 'HH24:MI') AS "05 Jan",
+    to_char(make_interval(secs => d06), 'HH24:MI') AS "06 Jan",
+    to_char(make_interval(secs => d07), 'HH24:MI') AS "07 Jan",
+    to_char(make_interval(secs => d08), 'HH24:MI') AS "08 Jan",
+    to_char(make_interval(secs => d09), 'HH24:MI') AS "09 Jan",
+    to_char(make_interval(secs => d10), 'HH24:MI') AS "10 Jan",
+    to_char(make_interval(secs => d11), 'HH24:MI') AS "11 Jan",
+    to_char(make_interval(secs => d12), 'HH24:MI') AS "12 Jan",
+    to_char(make_interval(secs => d13), 'HH24:MI') AS "13 Jan",
+    to_char(make_interval(secs => d14), 'HH24:MI') AS "14 Jan",
+    to_char(make_interval(secs => d15), 'HH24:MI') AS "15 Jan",
+    to_char(make_interval(secs => d16), 'HH24:MI') AS "16 Jan",
+    to_char(make_interval(secs => d17), 'HH24:MI') AS "17 Jan",
+    to_char(make_interval(secs => d18), 'HH24:MI') AS "18 Jan",
+    to_char(make_interval(secs => d19), 'HH24:MI') AS "19 Jan",
+    to_char(make_interval(secs => d20), 'HH24:MI') AS "20 Jan",
+    to_char(make_interval(secs => d21), 'HH24:MI') AS "21 Jan",
+    to_char(make_interval(secs => d22), 'HH24:MI') AS "22 Jan",
+    to_char(make_interval(secs => d23), 'HH24:MI') AS "23 Jan",
+    to_char(make_interval(secs => d24), 'HH24:MI') AS "24 Jan",
+    to_char(make_interval(secs => d25), 'HH24:MI') AS "25 Jan",
+    to_char(make_interval(secs => d26), 'HH24:MI') AS "26 Jan",
+    to_char(make_interval(secs => d27), 'HH24:MI') AS "27 Jan",
+    to_char(make_interval(secs => d28), 'HH24:MI') AS "28 Jan",
+    to_char(make_interval(secs => d29), 'HH24:MI') AS "29 Jan",
+    to_char(make_interval(secs => d30), 'HH24:MI') AS "30 Jan",
+    to_char(make_interval(secs => d31), 'HH24:MI') AS "31 Jan",
+
+    to_char(make_interval(secs => total_seconds), 'HH24:MI') AS "Total"
+FROM pivoted
+ORDER BY client_name, usecase_name;
+
+
+
+
+
+
+
+
