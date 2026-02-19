@@ -7,11 +7,22 @@ import bcrypt from "bcryptjs";
 import dotenv from "dotenv";
 import unirest from 'unirest';
 import nodemailer from 'nodemailer';
+import multer from 'multer'; // Add this import
+import fs from 'fs'; // Add this import
+import path from 'path'; // Add this import
+import { fileURLToPath } from 'url'; // Add this import
+import { exec } from 'child_process';
+import util from 'util';
+import axios from 'axios';
+import FormData from 'form-data';
+
 
 dotenv.config();
 
 const { Pool } = pkg;
 
+// Import the employee report routes
+import employeeReportRoutes from './employeeReportApi.js';
 
 const app = express();
 const PORT = process.env.PORT || 5050;
@@ -19,11 +30,14 @@ const JWT_SECRET = process.env.JWT_SECRET || "supersecretkey";
 
 // Middleware
 app.use(cors({
-  // origin: "http://mspeventwin1.westus.cloudapp.azure.com" ,// frontend
-  origin: ["http://localhost:5173", "http://10.41.11.103:5173", "http://localhost:80", "http://localhost"],
+  origin: ["http://localhost:5173", "http://10.41.11.103:5173", "http://localhost:80", "http://localhost", "http://10.41.11.87:5173",],
   credentials: true
 }));
 app.use(express.json());
+
+
+
+
 
 // PostgreSQL connection
 const pool = new Pool({
@@ -31,7 +45,9 @@ const pool = new Pool({
   host: process.env.DB_HOST || "localhost",
   // database: process.env.DB_NAME || "statusbot_poc",
   // database: process.env.DB_NAME || "msp_db_poc1",
-  database: process.env.DB_NAME || "statusbot_poc_06_01",
+  // database: process.env.DB_NAME || "statusbot_poc_06_01",
+  // database: process.env.DB_NAME || "statusbot_poc_28_01",
+  database: process.env.DB_NAME || "statusbot_poc_02_02",
   // database: process.env.DB_NAME || "poc_bot",
   // password: process.env.DB_PASSWORD || "root",
   password: process.env.DB_PASSWORD || "nitin258",
@@ -39,6 +55,8 @@ const pool = new Pool({
   port: process.env.DB_PORT || 5432,
 });
 
+// Store database pool in app.locals so routes can access it
+app.locals.db = pool;
 
 // Email configuration for initiated POC notifications
 const emailConfig = {
@@ -71,8 +89,6 @@ const USECASE_RECIPIENTS = process.env.USECASE_NOTIFICATION_RECIPIENTS ||
   'nitin.bhujbal@automationedge.com,suhas.kajawe@automationedge.com';
 
 
-
-
 // Authentication middleware
 const authenticateToken = (req, res, next) => {
   const authHeader = req.headers['authorization'];
@@ -91,11 +107,8 @@ const authenticateToken = (req, res, next) => {
   });
 };
 
-
-
-
-
-
+// After your authenticateToken middleware definition, use it for employee report routes
+app.use('/poc/employee-report', authenticateToken, employeeReportRoutes);
 
 
 // Add this to your server.js
@@ -105,6 +118,736 @@ app.get("/poc/api/auth/validate", authenticateToken, (req, res) => {
     user: req.user
   });
 });
+
+
+
+
+// --- KNOWLEDGE BASE FILE UPLOAD CONFIGURATION ---
+
+// Git repo working directory (clone of your repo)
+// ===== KNOWLEDGE BASE CONFIG (EXTERNAL REPO) =====
+
+
+const execPromise = (cmd, options = {}) =>
+  new Promise((resolve, reject) => {
+    exec(cmd, options, (err, stdout, stderr) => {
+      if (err) {
+        return reject((stderr || err.message || '').toString());
+      }
+      resolve((stdout || '').toString());
+    });
+  });
+
+
+const KB_ROOT = path.resolve(
+  'C:/Users/nitin.bhujbal/Documents/FullStack-POC/KnowledgeBase'
+);
+
+const KNOWLEDGE_BASE_ROOT = path.join(KB_ROOT, 'uploads');
+const GIT_REPO_PATH = KB_ROOT;
+const ENABLE_GIT_SYNC = true; // 🔴 OFF for laptop
+
+
+if (!fs.existsSync(KNOWLEDGE_BASE_ROOT)) {
+  fs.mkdirSync(KNOWLEDGE_BASE_ROOT, { recursive: true });
+}
+
+if (!GIT_REPO_PATH.includes('KnowledgeBase')) {
+  throw new Error('❌ Git repo path is NOT KnowledgeBase. Aborting.');
+}
+
+
+
+// Simple git command runner
+const runGitCommand = (command) => {
+  return new Promise((resolve, reject) => {
+    exec(command, { cwd: GIT_REPO_PATH }, (error, stdout, stderr) => {
+      if (error) {
+        console.error('❌ Git error:', stderr);
+        return reject(stderr);
+      }
+      resolve(stdout);
+    });
+  });
+};
+
+let gitLock = false;
+
+const acquireGitLock = async () => {
+  while (gitLock) {
+    await new Promise(resolve => setTimeout(resolve, 200));
+  }
+  gitLock = true;
+};
+
+const releaseGitLock = () => {
+  gitLock = false;
+};
+
+async function ensureLatestKnowledgeBase(usecaseId) {
+  const sparsePath = `uploads/${usecaseId}`;
+
+  await acquireGitLock();
+  try {
+    if (!fs.existsSync(path.join(KB_REPO_PATH, '.git'))) {
+      await execPromise(
+        `git clone --no-checkout ${KB_REPO_URL} "${KB_REPO_PATH}"`
+      );
+    }
+
+    // Pull latest first
+    await execPromise(`git pull origin main`, {
+      cwd: KB_REPO_PATH
+    });
+
+    // Enable sparse checkout for this usecase
+    await execPromise(`git sparse-checkout init --cone`, {
+      cwd: KB_REPO_PATH
+    });
+
+    await execPromise(
+      `git sparse-checkout set "${sparsePath}"`,
+      { cwd: KB_REPO_PATH }
+    );
+
+    console.log(`✅ Sparse synced: ${sparsePath}`);
+  } finally {
+    releaseGitLock();
+  }
+}
+
+// Remove acquireGitLock from inside these helpers
+async function disableSparseCheckout() {
+  try {
+    const sparseCheckoutFile = path.join(KB_REPO_PATH, '.git', 'info', 'sparse-checkout');
+    if (fs.existsSync(sparseCheckoutFile)) {
+      await execPromise(`git sparse-checkout disable`, { cwd: KB_REPO_PATH });
+      console.log('🔓 Sparse checkout disabled');
+    }
+  } catch (err) {
+    console.log('Note: Could not disable sparse-checkout', err.message);
+  }
+}
+
+
+
+
+// ===== Knowledge Base Repo Paths =====
+const KB_REPO_PATH = path.resolve(
+  'C:/Users/nitin.bhujbal/Documents/FullStack-POC/KnowledgeBase'
+);
+
+// ADD THIS LINE - define your Git repository URL
+const KB_REPO_URL = 'http://10.41.5.6/pocteamgroup/poc_knowledge_base_nitin.git'; // e.g., 'https://github.com/yourusername/KnowledgeBase.git'
+
+const KB_UPLOADS_PATH = path.join(KB_REPO_PATH, 'uploads');
+
+
+
+// Configure multer for file upload
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    const usecaseId = req.body.usecaseId;
+
+    if (!usecaseId) {
+      return cb(new Error('usecaseId is required'), null);
+    }
+
+    const folderPath = path.join(KB_UPLOADS_PATH, usecaseId);
+    console.log('📁 Multer destination:', folderPath);
+
+    if (!fs.existsSync(folderPath)) {
+      fs.mkdirSync(folderPath, { recursive: true });
+    }
+
+    cb(null, folderPath);
+  },
+
+  filename: function (req, file, cb) {
+    const ext = path.extname(file.originalname);
+    const baseName = path.basename(file.originalname, ext);
+
+    const safeName = baseName.replace(/[^\w.-]/g, '_');
+    const uniqueName = `${safeName}_${Date.now()}${ext}`;
+
+    console.log('📄 Multer filename:', uniqueName);
+    cb(null, uniqueName);
+  }
+});
+
+
+const upload = multer({
+  storage: storage,
+  limits: {
+    fileSize: 1000 * 1024 * 1024 // 100MB limit per file
+  },
+  fileFilter: (req, file, cb) => {
+    // Accept all file types
+    cb(null, true);
+  }
+});
+
+// --- KNOWLEDGE BASE ROUTES ---
+
+
+// Upload multiple files endpoint
+app.post('/poc/uploadKnowledgeMaterials',  authenticateToken,  upload.array('files', 10),  async (req, res) => {
+
+    const { usecaseId, uploadedBy, uploadedById } = req.body;
+    const loggedInUser = req.user?.emp_name || req.user?.name || 'Unknown User';
+    const db = req.app.locals.db;
+
+    if (!usecaseId || !req.files?.length) {
+      return res.status(400).json({
+        success: false,
+        message: 'Missing usecaseId or files'
+      });
+    }
+
+    try {
+      const results = [];
+
+      // ===============================
+      // ✅ STEP 1: Save to DB
+      // ===============================
+      for (const file of req.files) {
+        const dbRes = await db.query(
+          `INSERT INTO knowledge_materials
+           (usecase_id, file_name, file_path, file_size, file_type, uploaded_by, uploaded_by_id, status)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,'active') RETURNING id`,
+          [
+            usecaseId,
+            file.filename,
+            file.path,
+            file.size,
+            file.mimetype,
+            uploadedBy || loggedInUser,
+            uploadedById || req.user?.emp_id
+          ]
+        );
+
+        results.push({
+          success: true,
+          fileId: dbRes.rows[0].id,
+          fileName: file.originalname
+        });
+      }
+
+      // ===============================
+      // ✅ STEP 2: Send to Git Machine
+      // ===============================
+      let gitSuccess = false;
+
+      try {
+        const formData = new FormData();
+        formData.append('usecaseId', usecaseId);
+        formData.append('uploadedBy', uploadedBy || loggedInUser);
+
+        req.files.forEach(file => {
+          formData.append('files', fs.createReadStream(file.path));
+        });
+
+        await axios.post(
+          'https://financebot.automationedge.com/poc/gitUploadKnowledgeMaterials',
+          formData,
+          {
+            headers: formData.getHeaders()
+          }
+        );
+
+        console.log('✅ Git Machine Sync Successful');
+        gitSuccess = true;
+
+      } catch (gitErr) {
+        console.error('⚠️ Git Machine Sync Failed:', gitErr.message);
+      }
+
+      // ===============================
+      // ✅ STEP 3: DELETE LOCAL FILES
+      // ===============================
+      try {
+        req.files.forEach(file => {
+          if (fs.existsSync(file.path)) {
+            fs.unlinkSync(file.path);
+            console.log(`🗑️ Deleted file: ${file.path}`);
+          }
+        });
+
+        // Delete entire usecase folder
+        const usecaseFolder = path.dirname(req.files[0].path);
+
+        if (fs.existsSync(usecaseFolder)) {
+          fs.rmSync(usecaseFolder, { recursive: true, force: true });
+          console.log(`🗑️ Deleted usecase folder: ${usecaseFolder}`);
+        }
+
+      } catch (deleteErr) {
+        console.error('❌ Cleanup Error:', deleteErr.message);
+      }
+
+      return res.json({
+        success: true,
+        message: gitSuccess
+          ? 'Files saved, synced to Git, and cleaned locally.'
+          : 'Files saved to DB. Git sync failed but local files cleaned.',
+        results
+      });
+
+    } catch (err) {
+
+      console.error('❌ Upload Error:', err);
+
+      // ===============================
+      // 🔥 Cleanup On Complete Failure
+      // ===============================
+      if (req.files) {
+        try {
+          req.files.forEach(file => {
+            if (fs.existsSync(file.path)) {
+              fs.unlinkSync(file.path);
+            }
+          });
+
+          const usecaseFolder = path.dirname(req.files[0].path);
+          if (fs.existsSync(usecaseFolder)) {
+            fs.rmSync(usecaseFolder, { recursive: true, force: true });
+          }
+
+        } catch (cleanupErr) {
+          console.error('❌ Failure Cleanup Error:', cleanupErr.message);
+        }
+      }
+
+      return res.status(500).json({
+        success: false,
+        message: 'Upload failed',
+        error: err.message
+      });
+    }
+  }
+);
+
+
+
+// Download file endpoint
+app.get('/poc/downloadKnowledgeMaterial/:fileId',  authenticateToken,  async (req, res) => {
+
+    try {
+      const fileId = Number(req.params.fileId);
+      const db = req.app.locals.db;
+
+      const result = await db.query(
+        `SELECT usecase_id, file_name 
+         FROM knowledge_materials 
+         WHERE id = $1`,
+        [fileId]
+      );
+
+      if (!result.rows.length) {
+        return res.status(404).json({
+          success: false,
+          message: 'File record not found in DB'
+        });
+      }
+
+      const { usecase_id, file_name } = result.rows[0];
+
+      console.log(`⬇️ Requesting file from Git machine: ${file_name}`);
+
+      // Call Git Machine API
+      const response = await axios.get(
+        `https://financebot.automationedge.com/poc/gitDownloadKnowledgeMaterial`,
+        {
+          params: {
+            usecaseId: usecase_id,
+            fileName: file_name
+          },
+          responseType: 'stream'
+        }
+      );
+
+      // Set headers
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="${file_name}"`
+      );
+
+      // Pipe stream directly to client
+      response.data.pipe(res);
+
+    } catch (err) {
+      console.error('❌ Download Error (DB Machine):', err.message);
+      return res.status(500).json({
+        success: false,
+        message: 'Download failed',
+        error: err.message
+      });
+    }
+  }
+);
+
+
+
+// Get files for usecase endpoint
+app.get('/poc/knowledgeBaseFiles/:usecaseId', authenticateToken, async (req, res) => {
+  try {
+    const { usecaseId } = req.params;
+    const db = req.app.locals.db;
+
+    const result = await db.query(
+      `SELECT 
+         id,                      -- ✅ REQUIRED
+         usecase_id,
+         file_name,
+         file_size,
+         uploaded_by,
+         uploaded_by_id,
+         upload_date
+       FROM knowledge_materials
+       WHERE usecase_id = $1
+         AND status = 'active'
+       ORDER BY upload_date DESC`,
+      [usecaseId]
+    );
+
+    const files = result.rows.map(file => ({
+      id: file.id,                           // ✅ EXPLICIT
+      usecase_id: file.usecase_id,
+      file_name: file.file_name,
+      file_size: file.file_size,
+      file_size_mb: (file.file_size / (1024 * 1024)).toFixed(2),
+      uploaded_by: file.uploaded_by,
+      uploaded_by_id: file.uploaded_by_id,
+      upload_date: file.upload_date
+    }));
+
+    res.json({ success: true, files });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+
+// Get Usecase details for Knowledge Base
+// app.get('/poc/knowledgeBaseUsecases', authenticateToken, async (req, res) => {
+//   try {
+//     const db = req.app.locals.db;
+//     if (!db) {
+//       return res.status(500).json({
+//         success: false,
+//         message: 'Database connection error'
+//       });
+//     }
+
+//     const { search } = req.query;
+
+//     // 🔐 User info from token
+//     const userId = req.user.emp_id || req.user.id;
+//     const userName = req.user.emp_name || req.user.name;
+
+//     // 🔐 Fetch permissions
+//     const permissionQuery = `
+//       SELECT 
+//         status_access,
+//         all_status_access,
+//         admin_access
+//       FROM public.user_permissions
+//       WHERE emp_id = $1
+//     `;
+//     const permissionResult = await db.query(permissionQuery, [userId]);
+
+//     let hasStatusAccess = false;
+//     let hasAllStatusAccess = false;
+//     let hasAdminAccess = false;
+
+//     if (permissionResult.rows.length > 0) {
+//       hasStatusAccess = permissionResult.rows[0].status_access;
+//       hasAllStatusAccess = permissionResult.rows[0].all_status_access;
+//       hasAdminAccess = permissionResult.rows[0].admin_access;
+//     }
+
+//     // 🧠 Base query
+//     let query = `
+//       SELECT 
+//         pd.poc_prj_id AS "Usecase Id",
+//         pd.client_name AS "Client Name",
+//         COALESCE(NULLIF(TRIM(pe.partner_name), ''), '-') AS "Partner Name",
+//         pd.poc_prj_name AS "Usecase Name",
+//         pd.status,
+//         pd.start_date,
+//         pd.excepted_end_date,
+//         pd.region,
+//         pd.poc_type,
+//         pd.department_name,
+//         pd.description,
+//         pd.tag,
+//         pe.actual_start_date
+//       FROM poc_prj_details pd
+//       LEFT JOIN poc_prj_efforts pe 
+//         ON pd.poc_prj_id = pe.poc_prj_id
+//       WHERE 1=1
+//     `;
+
+//     const queryParams = [];
+//     let paramCounter = 1;
+
+//     // 🔎 Search filter
+//     if (search) {
+//       query += `
+//         AND (
+//           pd.poc_prj_id ILIKE $${paramCounter}
+//           OR pd.client_name ILIKE $${paramCounter}
+//           OR pd.poc_prj_name ILIKE $${paramCounter}
+//           OR pe.partner_name ILIKE $${paramCounter}
+//         )
+//       `;
+//       queryParams.push(`%${search}%`);
+//       paramCounter++;
+//     }
+
+//     // 🔐 Permission-based filtering
+//     if (!(hasAllStatusAccess || hasAdminAccess)) {
+
+//       if (!hasStatusAccess) {
+//         // 🚫 No access at all
+//         return res.json({
+//           success: true,
+//           data: [],
+//           total: 0
+//         });
+//       }
+
+//       // ✅ Only assigned + In Progress
+//       query += `
+//         AND pd.status = 'In Progress'
+//         AND (
+//           pd.assigned_to ILIKE $${paramCounter}
+//           OR pd.assigned_to ILIKE $${paramCounter + 1}
+//           OR pd.assigned_to ILIKE $${paramCounter + 2}
+//           OR pd.assigned_to ILIKE $${paramCounter + 3}
+//           OR pd.assigned_to = $${paramCounter + 4}
+//         )
+//       `;
+
+//       queryParams.push(
+//         `%${userName}%`,
+//         `${userName},%`,
+//         `%, ${userName},%`,
+//         `%, ${userName}`,
+//         userName
+//       );
+
+//       paramCounter += 5;
+//     }
+
+//     // 🧮 GROUP BY
+//     query += `
+//       GROUP BY 
+//         pd.poc_prj_id,
+//         pd.client_name,
+//         pd.poc_prj_name,
+//         pd.status,
+//         pd.start_date,
+//         pd.excepted_end_date,
+//         pd.region,
+//         pd.poc_type,
+//         pd.department_name,
+//         pd.description,
+//         pd.tag,
+//         pe.partner_name,
+//         pe.actual_start_date
+//     `;
+
+//     // ⬇️ ORDER BY
+//     query += `
+//       ORDER BY
+//         CASE WHEN pe.actual_start_date IS NULL THEN 1 ELSE 0 END,
+//         pe.actual_start_date DESC,
+//         pd.poc_prj_id ASC
+//     `;
+
+//     // ▶️ Execute query
+//     const { rows: usecases } = await db.query(query, queryParams);
+
+//     // 📎 Check file availability
+//     for (const usecase of usecases) {
+//       const fileResult = await db.query(
+//         `
+//           SELECT COUNT(*) AS file_count
+//           FROM knowledge_materials
+//           WHERE usecase_id = $1
+//             AND status = 'active'
+//         `,
+//         [usecase['Usecase Id']]
+//       );
+
+//       usecase.hasFiles = parseInt(fileResult.rows[0].file_count, 10) > 0;
+//     }
+
+//     // ✅ Response
+//     res.json({
+//       success: true,
+//       data: usecases,
+//       total: usecases.length
+//     });
+
+//   } catch (error) {
+//     console.error('❌ Error in /poc/knowledgeBaseUsecases:', error);
+//     res.status(500).json({
+//       success: false,
+//       message: 'Error fetching usecases',
+//       error: error.message
+//     });
+//   }
+// });
+
+// Get Usecase details for Knowledge Base
+app.get('/poc/knowledgeBaseUsecases', authenticateToken, async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Database connection error'
+      });
+    }
+
+    const { search } = req.query;
+
+    // 🔐 User info from token
+    const userId = req.user.emp_id || req.user.id;
+    const userName = req.user.emp_name || req.user.name;
+
+    // 🔐 Fetch permissions
+    const permissionQuery = `
+      SELECT 
+        status_access,
+        admin_access
+      FROM public.user_permissions
+      WHERE emp_id = $1
+    `;
+    const permissionResult = await db.query(permissionQuery, [userId]);
+
+    let hasStatusAccess = false;
+    let hasAdminAccess = false;
+
+    if (permissionResult.rows.length > 0) {
+      hasStatusAccess = permissionResult.rows[0].status_access;
+      hasAdminAccess = permissionResult.rows[0].admin_access;
+    }
+
+    // 🚫 No access at all — return empty
+    if (!hasStatusAccess && !hasAdminAccess) {
+      return res.json({
+        success: true,
+        data: [],
+        total: 0
+      });
+    }
+
+    // 🧠 Base query — no permission filtering needed, all users with access see all usecases
+    let query = `
+      SELECT 
+        pd.poc_prj_id AS "Usecase Id",
+        pd.client_name AS "Client Name",
+        COALESCE(NULLIF(TRIM(pe.partner_name), ''), '-') AS "Partner Name",
+        pd.poc_prj_name AS "Usecase Name",
+        pd.status,
+        pd.start_date,
+        pd.excepted_end_date,
+        pd.region,
+        pd.poc_type,
+        pd.department_name,
+        pd.description,
+        pd.tag,
+        pe.actual_start_date
+      FROM poc_prj_details pd
+      LEFT JOIN poc_prj_efforts pe 
+        ON pd.poc_prj_id = pe.poc_prj_id
+      WHERE 1=1
+    `;
+
+    const queryParams = [];
+    let paramCounter = 1;
+
+    // 🔎 Search filter
+    if (search) {
+      query += `
+        AND (
+          pd.poc_prj_id ILIKE $${paramCounter}
+          OR pd.client_name ILIKE $${paramCounter}
+          OR pd.poc_prj_name ILIKE $${paramCounter}
+          OR pe.partner_name ILIKE $${paramCounter}
+        )
+      `;
+      queryParams.push(`%${search}%`);
+      paramCounter++;
+    }
+
+    // 🧮 GROUP BY
+    query += `
+      GROUP BY 
+        pd.poc_prj_id,
+        pd.client_name,
+        pd.poc_prj_name,
+        pd.status,
+        pd.start_date,
+        pd.excepted_end_date,
+        pd.region,
+        pd.poc_type,
+        pd.department_name,
+        pd.description,
+        pd.tag,
+        pe.partner_name,
+        pe.actual_start_date
+    `;
+
+    // ⬇️ ORDER BY
+    query += `
+      ORDER BY
+        CASE WHEN pe.actual_start_date IS NULL THEN 1 ELSE 0 END,
+        pe.actual_start_date DESC,
+        pd.poc_prj_id ASC
+    `;
+
+    // ▶️ Execute query
+    const { rows: usecases } = await db.query(query, queryParams);
+
+    // 📎 Check file availability
+    for (const usecase of usecases) {
+      const fileResult = await db.query(
+        `
+          SELECT COUNT(*) AS file_count
+          FROM knowledge_materials
+          WHERE usecase_id = $1
+            AND status = 'active'
+        `,
+        [usecase['Usecase Id']]
+      );
+
+      usecase.hasFiles = parseInt(fileResult.rows[0].file_count, 10) > 0;
+    }
+
+    // ✅ Response
+    res.json({
+      success: true,
+      data: usecases,
+      total: usecases.length
+    });
+
+  } catch (error) {
+    console.error('❌ Error in /poc/knowledgeBaseUsecases:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching usecases',
+      error: error.message
+    });
+  }
+});
+
+
+
+
 
 
 
@@ -799,7 +1542,8 @@ app.get("/poc/permissions/:emp_id", authenticateToken, async (req, res) => {
         sales_dashboard_access,
         status_status_access,
         all_sales_access,
-        admin_access
+        admin_access,
+        knowledge_base_access
       FROM public.user_permissions
       WHERE emp_id = $1;
     `;
@@ -1227,22 +1971,98 @@ app.delete("/poc/deleteStatus/:id", authenticateToken, async (req, res) => {
 
 
 
-
 app.get("/poc/getUsecases", authenticateToken, async (req, res) => {
   try {
-    const result = await pool.query(`
-    SELECT poc_prj_id, poc_prj_name, client_name, partner_client_own, sales_person, description, assigned_to, start_date, excepted_end_date, status, remarks, created_by, region, sales_account_manager_name, complexity, last_status, last_status_date, status_change_date, is_billable, poc_type, tag, spoc_email_address, spoc_designation, department_name
-  
-      FROM public.poc_prj_details 
-       where status ='In Progress' ORDER BY poc_prj_name
-    `);
+    // Get user info from token
+    const userId = req.user.emp_id || req.user.id;
+    const userName = req.user.emp_name || req.user.name;
+
+    // Fetch user permissions first
+    const permissionQuery = `
+      SELECT 
+        status_access,
+        all_status_access,
+        admin_access
+      FROM public.user_permissions
+      WHERE emp_id = $1;
+    `;
+
+    const permissionResult = await pool.query(permissionQuery, [userId]);
+
+    let hasStatusAccess = false;
+    let hasAllStatusAccess = false;
+    let hasAdminAccess = false;
+
+    if (permissionResult.rows.length > 0) {
+      hasStatusAccess = permissionResult.rows[0].status_access;
+      hasAllStatusAccess = permissionResult.rows[0].all_status_access;
+      hasAdminAccess = permissionResult.rows[0].admin_access;
+    }
+
+    let query = '';
+    let params = [];
+
+    // Logic based on permissions
+    if (hasAllStatusAccess || hasAdminAccess) {
+      // Show all in-progress usecases
+      query = `
+        SELECT 
+          poc_prj_id, poc_prj_name, client_name, partner_client_own, sales_person, 
+          description, assigned_to, start_date, excepted_end_date, status, remarks, 
+          created_by, region, sales_account_manager_name, complexity, last_status, 
+          last_status_date, status_change_date, is_billable, poc_type, tag, 
+          spoc_email_address, spoc_designation, department_name
+        FROM public.poc_prj_details 
+        WHERE status = 'In Progress' 
+        ORDER BY poc_prj_name
+      `;
+    } else if (hasStatusAccess) {
+      // Show only assigned usecases
+      query = `
+        SELECT 
+          poc_prj_id, poc_prj_name, client_name, partner_client_own, sales_person, 
+          description, assigned_to, start_date, excepted_end_date, status, remarks, 
+          created_by, region, sales_account_manager_name, complexity, last_status, 
+          last_status_date, status_change_date, is_billable, poc_type, tag, 
+          spoc_email_address, spoc_designation, department_name
+        FROM public.poc_prj_details 
+        WHERE status = 'In Progress' 
+          AND (
+            assigned_to ILIKE $1 
+            OR assigned_to ILIKE $2
+            OR assigned_to ILIKE $3
+            OR assigned_to ILIKE $4
+            OR assigned_to = $5
+          )
+        ORDER BY poc_prj_name
+      `;
+
+      // Prepare search patterns for comma-separated assigned_to field
+      const userNamePattern = `%${userName}%`;
+      const userNameStartPattern = `${userName},%`;
+      const userNameMiddlePattern = `%, ${userName},%`;
+      const userNameEndPattern = `%, ${userName}`;
+
+      params = [
+        userNamePattern,
+        userNameStartPattern,
+        userNameMiddlePattern,
+        userNameEndPattern,
+        userName
+      ];
+    } else {
+      // No access - return empty array
+      return res.json([]);
+    }
+
+    const result = await pool.query(query, params);
     res.json(result.rows);
+
   } catch (err) {
     console.error("Error fetching usecases:", err);
     res.status(500).json({ message: "Internal server error" });
   }
 });
-
 
 
 
@@ -1323,6 +2143,7 @@ ORDER BY start_date DESC;
 
 
 app.post("/poc/api/auth/login", async (req, res) => {
+  console.log("Login attempt with body:", req.body);
   try {
     const { username, password } = req.body;
 
@@ -1382,7 +2203,8 @@ app.post("/poc/api/auth/login", async (req, res) => {
       department_name: user.department_name
     };
 
-    const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: "1h" });
+    // const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: "1h" });
+    const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: "1m" });
 
     // ✅ ADD department_name to response
     const userResponse = {
@@ -2689,6 +3511,8 @@ app.post('/poc/leave/apply', authenticateToken, async (req, res) => {
       days,
       reason,
       contactDuringLeave,
+      halfDay = false,
+      halfDayType,
       status = 'Pending for approval of reporting manager'
     } = req.body;
 
@@ -2721,7 +3545,9 @@ app.post('/poc/leave/apply', authenticateToken, async (req, res) => {
     console.log('Formatted Dates:', {
       apply_date: formattedApplyDate,
       from_date: formattedStartDate,
-      to_date: formattedEndDate
+      to_date: formattedEndDate,
+      halfDay: halfDay,
+      halfDayType: halfDayType
     });
 
     // Fetch employee email from emp_details table
@@ -2760,8 +3586,10 @@ app.post('/poc/leave/apply', authenticateToken, async (req, res) => {
         from_date, 
         to_date, 
         reason,
-        leave_status
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        leave_status,
+        half_day,
+        half_day_type
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
       RETURNING *
     `;
 
@@ -2775,7 +3603,9 @@ app.post('/poc/leave/apply', authenticateToken, async (req, res) => {
       formattedStartDate, // Use formatted start date
       formattedEndDate, // Use formatted end date
       reason,
-      status
+      status,
+      halfDay,
+      halfDayType
     ];
 
     console.log('Inserting leave application with values:', values);
@@ -2798,6 +3628,8 @@ app.post('/poc/leave/apply', authenticateToken, async (req, res) => {
       days: parseFloat(days),
       reason: reason,
       contact_during_leave: contactDuringLeave || null,
+      half_day: halfDay,
+      half_day_type: halfDayType,
       status: status
     }).then(success => {
       if (success) {
@@ -2862,7 +3694,7 @@ Employee Name: ${leaveDetails.emp_name}
 Employee Email: ${leaveDetails.emp_email}
 Leave Type: ${formatLeaveType(leaveDetails.leave_type)}
 Leave Period: ${formatDate(leaveDetails.start_date)} to ${formatDate(leaveDetails.end_date)}
-Number of Days: ${leaveDetails.days} ${leaveDetails.half_day ? '(Half Day)' : ''}
+Number of Days: ${leaveDetails.days} ${leaveDetails.half_day ? '(Half Day' + (leaveDetails.half_day_type === 'first' ? ' - First Half)' : ' - Second Half)') : ''}
 Reason: ${leaveDetails.reason}
 Contact During Leave: ${leaveDetails.contact_during_leave || 'Not provided'}
 
@@ -2912,7 +3744,7 @@ POC Bot
             </tr>
             <tr>
               <td style="padding: 8px; border: 1px solid #ddd;"><strong>Number of Days:</strong></td>
-              <td style="padding: 8px; border: 1px solid #ddd;">${leaveDetails.days} ${leaveDetails.half_day ? '(Half Day - ' + (leaveDetails.half_day_type === 'first' ? 'First Half' : 'Second Half') + ')' : ''}</td>
+              <td style="padding: 8px; border: 1px solid #ddd;">${leaveDetails.days} ${leaveDetails.half_day ? '(Half Day - ' + (leaveDetails.half_day_type === 'first' ? 'First Half)' : 'Second Half)') : ''}</td>
             </tr>
             <tr>
               <td style="padding: 8px; border: 1px solid #ddd;"><strong>Reason:</strong></td>
@@ -2995,7 +3827,9 @@ app.get('/poc/leave/requests', authenticateToken, async (req, res) => {
           reason,
           leave_status as status,
           emp_email,
-          rm_emp_email
+          rm_emp_email,
+          half_day,
+          half_day_type
         FROM employee_leave_details 
         ORDER BY sr_no DESC
       `;
@@ -3013,7 +3847,9 @@ app.get('/poc/leave/requests', authenticateToken, async (req, res) => {
           reason,
           leave_status as status,
           emp_email,
-          rm_emp_email
+          rm_emp_email,
+          half_day,
+          half_day_type
         FROM employee_leave_details 
         WHERE emp_id = $1 
         ORDER BY sr_no DESC
@@ -3059,8 +3895,10 @@ app.get('/poc/leave/requests', authenticateToken, async (req, res) => {
       return `${year}-${month}-${day}`;
     };
 
-    // Calculate days between two dates
-    const calculateDays = (startDateStr, endDateStr) => {
+    // Calculate days between two dates - UPDATED for half-day
+    const calculateDays = (startDateStr, endDateStr, halfDay = false) => {
+      if (halfDay) return 0.5;
+
       const startDate = parseDate(startDateStr);
       const endDate = parseDate(endDateStr);
 
@@ -3070,14 +3908,14 @@ app.get('/poc/leave/requests', authenticateToken, async (req, res) => {
       const end = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate());
 
       const diffTime = Math.abs(end - start);
-      const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+      const diffDays = Math.floor(diffTime / (1024 * 60 * 60 * 24));
 
       return diffDays + 1;
     };
 
     // Transform the data
     const transformedResult = result.rows.map(row => {
-      const days = calculateDays(row.from_date, row.to_date);
+      const days = calculateDays(row.from_date, row.to_date, row.half_day);
       const formattedStartDate = formatDateToYYYYMMDD(row.from_date);
       const formattedEndDate = formatDateToYYYYMMDD(row.to_date);
 
@@ -3090,9 +3928,9 @@ app.get('/poc/leave/requests', authenticateToken, async (req, res) => {
         end_date: formattedEndDate,
         days: days,
         reason: row.reason,
-        contact_during_leave: null,
-        half_day: false,
-        half_day_type: 'first',
+        // contact_during_leave: row.contact_during_leave || null,
+        half_day: row.half_day || false,
+        half_day_type: row.half_day_type || 'first',
         status: row.status,
         applied_date: row.apply_date,
         updated_at: row.apply_date,
@@ -3108,35 +3946,8 @@ app.get('/poc/leave/requests', authenticateToken, async (req, res) => {
   }
 });
 
-// Get user permissions endpoint
-// app.get('/poc/permissions/:emp_id', authenticateToken, async (req, res) => {
-//   try {
-//     const { emp_id } = req.params;
 
-//     const query = `
-//       SELECT * FROM user_permissions WHERE emp_id = $1
-//     `;
-
-//     const result = await pool.query(query, [emp_id]);
-
-//     if (result.rows.length === 0) {
-//       // Return default permissions if no record found
-//       return res.status(200).json({
-//         all_status_access: false,
-//         create_project: false,
-//         edit_project: false,
-//         delete_project: false
-//       });
-//     }
-
-//     res.status(200).json(result.rows[0]);
-//   } catch (error) {
-//     console.error('Error fetching permissions:', error);
-//     res.status(500).json({ error: 'Failed to fetch permissions' });
-//   }
-// });
-
-// LEAVE EDIT API - Fixed
+// LEAVE EDIT API - Updated with half-day support
 app.put('/poc/leave/edit/:id', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
@@ -3147,13 +3958,14 @@ app.put('/poc/leave/edit/:id', authenticateToken, async (req, res) => {
       endDate,
       reason,
       contactDuringLeave,
-      halfDay,
+      halfDay = false,
       halfDayType
     } = req.body;
 
     // 1. Check if leave exists - Get original details for email
     const leaveQuery = `
-      SELECT sr_no, emp_id, emp_name, leave_type, from_date, to_date, reason, leave_status
+      SELECT sr_no, emp_id, emp_name, leave_type, from_date, to_date, reason, leave_status,
+             half_day, half_day_type
       FROM employee_leave_details WHERE sr_no = $1
     `;
     const leaveResult = await pool.query(leaveQuery, [id]);
@@ -3216,7 +4028,9 @@ app.put('/poc/leave/edit/:id', authenticateToken, async (req, res) => {
 
     console.log('Edit - Formatted Dates:', {
       from_date: formattedStartDate,
-      to_date: formattedEndDate
+      to_date: formattedEndDate,
+      halfDay: halfDay,
+      halfDayType: halfDayType
     });
 
     // 3. Calculate days for updated leave
@@ -3245,15 +4059,17 @@ app.put('/poc/leave/edit/:id', authenticateToken, async (req, res) => {
 
     const updatedDays = calculateDays();
 
-    // 4. Update leave in employee_leave_details table
+    // 4. Update leave in employee_leave_details table - ADD half_day and half_day_type
     const updateQuery = `
       UPDATE employee_leave_details 
       SET 
         leave_type = $1,
         from_date = $2,
         to_date = $3,
-        reason = $4
-      WHERE sr_no = $5
+        reason = $4,
+        half_day = $5,
+        half_day_type = $6
+      WHERE sr_no = $7
       RETURNING *
     `;
 
@@ -3262,6 +4078,8 @@ app.put('/poc/leave/edit/:id', authenticateToken, async (req, res) => {
       formattedStartDate,  // Use formatted date (DD-MM-YYYY)
       formattedEndDate,    // Use formatted date (DD-MM-YYYY)
       reason,
+      halfDay,
+      halfDayType,
       id
     ];
 
@@ -3293,18 +4111,35 @@ app.put('/poc/leave/edit/:id', authenticateToken, async (req, res) => {
       return dateStr;
     };
 
-    // Prepare data for email
+    // Prepare data for email - Include half_day information in both original and updated
     const originalForEmail = {
       ...originalLeave,
       from_date: formatForEmail(originalLeave.from_date),
-      to_date: formatForEmail(originalLeave.to_date)
+      to_date: formatForEmail(originalLeave.to_date),
+      // Calculate days for original leave
+      days: originalLeave.half_day ? 0.5 :
+        (() => {
+          const parseDate = (dateStr) => {
+            if (dateStr.match(/^\d{2}-\d{2}-\d{4}$/)) {
+              const parts = dateStr.split('-');
+              return new Date(parts[2], parts[1] - 1, parts[0]);
+            }
+            return new Date(dateStr);
+          };
+          const start = parseDate(originalLeave.from_date);
+          const end = parseDate(originalLeave.to_date);
+          const timeDiff = Math.abs(end.getTime() - start.getTime());
+          return Math.ceil(timeDiff / (1000 * 3600 * 24)) + 1;
+        })()
     };
 
     const updatedForEmail = {
       ...updatedLeave,
       from_date: formattedStartDate, // Already in DD-MM-YYYY format
       to_date: formattedEndDate,     // Already in DD-MM-YYYY format
-      days: updatedDays
+      days: updatedDays,
+      half_day: halfDay,
+      half_day_type: halfDayType
     };
 
     // 6. Send email notification in background
@@ -3331,23 +4166,26 @@ app.put('/poc/leave/edit/:id', authenticateToken, async (req, res) => {
   }
 });
 
-// Format days - remove decimal for whole numbers
-const formatDays = (days) => {
+// Format days - Updated to include half-day type
+const formatDays = (days, halfDay = false, halfDayType = 'first') => {
   const numDays = Number(days); // Convert to number first
+
+  // If it's a half day
+  if (halfDay && numDays === 0.5) {
+    const halfType = halfDayType === 'first' ? 'First Half' : 'Second Half';
+    return `0.5 (Half Day - ${halfType})`;
+  }
 
   // If days is a whole number, show without decimal
   if (Number.isInteger(numDays)) {
     return numDays.toString();
   }
-  // If it's 0.5 (half day), show as "0.5"
-  if (numDays === 0.5) {
-    return '0.5 (Half Day)';
-  }
+
   // For other decimal values, show with 1 decimal place
   return numDays.toFixed(1);
 };
 
-// Function to send leave update email
+// Function to send leave update email - Updated for half-day support
 const sendLeaveUpdateEmail = async (originalLeave, updatedLeave, updatedByName) => {
   try {
     // Parse recipients (use same as other emails)
@@ -3402,7 +4240,7 @@ const sendLeaveUpdateEmail = async (originalLeave, updatedLeave, updatedByName) 
       return typeMap[type] || type;
     };
 
-    // Create email body
+    // Create email body - Updated to show half-day information
     const emailBody = `
 Hi Team,
 
@@ -3414,13 +4252,17 @@ Employee ID: ${originalLeave.emp_id}
 Employee Name: ${originalLeave.emp_name || 'N/A'}
 Leave Type: ${formatLeaveType(originalLeave.leave_type)}
 Leave Period: ${formatDate(originalLeave.from_date)} to ${formatDate(originalLeave.to_date)}
+Number of Days: ${formatDays(originalLeave.days, originalLeave.half_day, originalLeave.half_day_type)}
+Reason: ${originalLeave.reason}
+Contact During Leave: ${originalLeave.contact_during_leave || 'Not provided'}
 
 Updated Leave Details:
 
 Leave Type: ${formatLeaveType(updatedLeave.leave_type)}
 Leave Period: ${formatDate(updatedLeave.from_date)} to ${formatDate(updatedLeave.to_date)}
-Number of Days: ${formatDays(updatedLeave.days)}
-Reason for Update: ${updatedLeave.reason}
+Number of Days: ${formatDays(updatedLeave.days, updatedLeave.half_day, updatedLeave.half_day_type)}
+Reason: ${updatedLeave.reason}
+Contact During Leave: ${updatedLeave.contact_during_leave || 'Not provided'}
 
 Kindly consider the above changes and update the leave request accordingly.
 
@@ -3466,6 +4308,18 @@ Note: This leave was updated by ${updatedByName}
               <td style="padding: 8px; border: 1px solid #ddd;"><strong>Leave Period:</strong></td>
               <td style="padding: 8px; border: 1px solid #ddd;">${formatDate(originalLeave.from_date)} to ${formatDate(originalLeave.to_date)}</td>
             </tr>
+            <tr>
+              <td style="padding: 8px; border: 1px solid #ddd;"><strong>Number of Days:</strong></td>
+              <td style="padding: 8px; border: 1px solid #ddd;">${formatDays(originalLeave.days, originalLeave.half_day, originalLeave.half_day_type)}</td>
+            </tr>
+            <tr>
+              <td style="padding: 8px; border: 1px solid #ddd;"><strong>Reason:</strong></td>
+              <td style="padding: 8px; border: 1px solid #ddd;">${originalLeave.reason}</td>
+            </tr>
+            <tr>
+              <td style="padding: 8px; border: 1px solid #ddd;"><strong>Contact During Leave:</strong></td>
+              <td style="padding: 8px; border: 1px solid #ddd;">${originalLeave.contact_during_leave || 'Not provided'}</td>
+            </tr>
           </table>
           
           <h4 style="color: #333; margin: 20px 0 10px 0;">Updated Leave Details:</h4>
@@ -3480,11 +4334,15 @@ Note: This leave was updated by ${updatedByName}
             </tr>
             <tr>
               <td style="padding: 8px; border: 1px solid #ddd;"><strong>Number of Days:</strong></td>
-              <td style="padding: 8px; border: 1px solid #ddd;">${formatDays(updatedLeave.days)}</td>
+              <td style="padding: 8px; border: 1px solid #ddd;">${formatDays(updatedLeave.days, updatedLeave.half_day, updatedLeave.half_day_type)}</td>
             </tr>
             <tr>
-              <td style="padding: 8px; border: 1px solid #ddd;"><strong>Reason for Update:</strong></td>
+              <td style="padding: 8px; border: 1px solid #ddd;"><strong>Reason:</strong></td>
               <td style="padding: 8px; border: 1px solid #ddd;">${updatedLeave.reason}</td>
+            </tr>
+            <tr>
+              <td style="padding: 8px; border: 1px solid #ddd;"><strong>Contact During Leave:</strong></td>
+              <td style="padding: 8px; border: 1px solid #ddd;">${updatedLeave.contact_during_leave || 'Not provided'}</td>
             </tr>
           </table>
           
@@ -3540,7 +4398,8 @@ app.delete('/poc/leave/delete/:id', authenticateToken, async (req, res) => {
 
     // 1. Check if leave exists
     const leaveQuery = `
-      SELECT sr_no, emp_id, emp_name, leave_type, from_date, to_date, reason 
+      SELECT sr_no, emp_id, emp_name, leave_type, from_date, to_date, reason,
+             half_day, half_day_type
       FROM employee_leave_details WHERE sr_no = $1
     `;
     const leaveResult = await pool.query(leaveQuery, [id]);
@@ -3570,6 +4429,35 @@ app.delete('/poc/leave/delete/:id', authenticateToken, async (req, res) => {
       }
     }
 
+    // Calculate days based on half_day flag
+    const calculateDays = () => {
+      if (leave.half_day) return 0.5;
+
+      const parseDate = (dateStr) => {
+        if (!dateStr) return new Date();
+
+        // Handle DD-MM-YYYY format
+        if (dateStr.match(/^\d{2}-\d{2}-\d{4}$/)) {
+          const parts = dateStr.split('-');
+          return new Date(parts[2], parts[1] - 1, parts[0]);
+        }
+
+        // Handle YYYY-MM-DD format
+        if (dateStr.match(/^\d{4}-\d{2}-\d{2}$/)) {
+          return new Date(dateStr);
+        }
+
+        return new Date(dateStr);
+      };
+
+      const start = parseDate(leave.from_date);
+      const end = parseDate(leave.to_date);
+      const timeDiff = Math.abs(end.getTime() - start.getTime());
+      return Math.ceil(timeDiff / (1000 * 3600 * 24)) + 1;
+    };
+
+    const days = calculateDays();
+
     // 3. Log the revoke message before deleting
     console.log('=== LEAVE REVOKE LOG ===');
     console.log('Timestamp:', new Date().toISOString());
@@ -3582,7 +4470,10 @@ app.delete('/poc/leave/delete/:id', authenticateToken, async (req, res) => {
       leaveType: leave.leave_type,
       startDate: leave.from_date,
       endDate: leave.to_date,
-      reason: leave.reason
+      reason: leave.reason,
+      halfDay: leave.half_day,
+      halfDayType: leave.half_day_type,
+      days: days
     });
 
     if (revokeMessage && revokeMessage.trim() !== '') {
@@ -3601,7 +4492,11 @@ app.delete('/poc/leave/delete/:id', authenticateToken, async (req, res) => {
       leave_type: leave.leave_type,
       from_date: leave.from_date,
       to_date: leave.to_date,
-      reason: leave.reason
+      reason: leave.reason,
+      half_day: leave.half_day,
+      half_day_type: leave.half_day_type,
+      contact_during_leave: leave.contact_during_leave,
+      days: days
     }, emp_id, revokeMessage)
       .then(success => {
         if (success) {
@@ -3673,6 +4568,36 @@ const sendRevokeEmail = async (leaveDetails, revokerId, revokeMessage) => {
       });
     };
 
+    // Format leave type
+    const formatLeaveType = (type) => {
+      const typeMap = {
+        sick: 'Sick Leave',
+        privileged: 'Privileged Leave',
+        casual: 'Casual Leave',
+        comp_off: 'Comp Off',
+        leave_without_pay: 'Leave Without Pay',
+        maternity: 'Maternity Leave',
+        paternity: 'Paternity Leave'
+      };
+      return typeMap[type] || type;
+    };
+
+    // Format days with half-day information
+    const formatDays = (days, halfDay = false, halfDayType = 'first') => {
+      const numDays = Number(days);
+
+      if (halfDay && numDays === 0.5) {
+        const halfType = halfDayType === 'first' ? 'First Half' : 'Second Half';
+        return `0.5 (Half Day - ${halfType})`;
+      }
+
+      if (Number.isInteger(numDays)) {
+        return numDays.toString();
+      }
+
+      return numDays.toFixed(1);
+    };
+
     // Create email body
     const emailBody = `
 Hi Team,
@@ -3681,8 +4606,10 @@ I would like to request the revocation of the previously applied leave as per th
 
 Employee ID: ${leaveDetails.emp_id}
 Employee Name: ${leaveDetails.emp_name || 'N/A'}
-Leave Type: ${leaveDetails.leave_type || 'N/A'}
+Leave Type: ${formatLeaveType(leaveDetails.leave_type)}
 Leave Period: ${formatDate(leaveDetails.from_date)} to ${formatDate(leaveDetails.to_date)}
+Number of Days: ${formatDays(leaveDetails.days, leaveDetails.half_day, leaveDetails.half_day_type)}
+Contact During Leave: ${leaveDetails.contact_during_leave || 'Not provided'}
 Reason for Revocation: ${revokeMessage || 'No reason provided'}
 
 Kindly revoke the above-mentioned leave request at your convenience.
@@ -3714,8 +4641,8 @@ Note: This leave was revoked by User ID: ${revokerId}
           
           <table style="border-collapse: collapse; margin: 20px 0;">
             <tr>
-              <td style="padding: 8px; border: 1px solid #ddd;"><strong>Employee ID:</strong></td>
-              <td style="padding: 8px; border: 1px solid #ddd;">${leaveDetails.emp_id}</td>
+              <td style="padding: 8px; border: 1px solid #ddd; width: 30%;"><strong>Employee ID:</strong></td>
+              <td style="padding: 8px; border: 1px solid #ddd; width: 70%;">${leaveDetails.emp_id}</td>
             </tr>
             <tr>
               <td style="padding: 8px; border: 1px solid #ddd;"><strong>Employee Name:</strong></td>
@@ -3723,11 +4650,19 @@ Note: This leave was revoked by User ID: ${revokerId}
             </tr>
             <tr>
               <td style="padding: 8px; border: 1px solid #ddd;"><strong>Leave Type:</strong></td>
-              <td style="padding: 8px; border: 1px solid #ddd;">${leaveDetails.leave_type || 'N/A'}</td>
+              <td style="padding: 8px; border: 1px solid #ddd;">${formatLeaveType(leaveDetails.leave_type)}</td>
             </tr>
             <tr>
               <td style="padding: 8px; border: 1px solid #ddd;"><strong>Leave Period:</strong></td>
               <td style="padding: 8px; border: 1px solid #ddd;">${formatDate(leaveDetails.from_date)} to ${formatDate(leaveDetails.to_date)}</td>
+            </tr>
+            <tr>
+              <td style="padding: 8px; border: 1px solid #ddd;"><strong>Number of Days:</strong></td>
+              <td style="padding: 8px; border: 1px solid #ddd;">${formatDays(leaveDetails.days, leaveDetails.half_day, leaveDetails.half_day_type)}</td>
+            </tr>
+            <tr>
+              <td style="padding: 8px; border: 1px solid #ddd;"><strong>Contact During Leave:</strong></td>
+              <td style="padding: 8px; border: 1px solid #ddd;">${leaveDetails.contact_during_leave || 'Not provided'}</td>
             </tr>
             <tr>
               <td style="padding: 8px; border: 1px solid #ddd;"><strong>Reason for Revocation:</strong></td>
@@ -5068,6 +6003,7 @@ app.get('/poc/admin/getUserPermissions/:empId', authenticateToken, async (req, r
         status_status_access: false,
         sales_dashboard_access: false,
         all_sales_access: false,
+        knowledge_base_access: false,
       });
     }
 
@@ -5083,6 +6019,7 @@ app.get('/poc/admin/getUserPermissions/:empId', authenticateToken, async (req, r
       status_status_access: permissions.status_status_access || false,
       sales_dashboard_access: permissions.sales_dashboard_access || false,
       all_sales_access: permissions.all_sales_access || false,
+      knowledge_base_access: permissions.knowledge_base_access || false,
     });
 
   } catch (error) {
@@ -5104,7 +6041,8 @@ app.post('/poc/admin/updateUserPermissions', authenticateToken, async (req, res)
       sales_admin,
       status_status_access,
       sales_dashboard_access,
-      all_sales_access
+      all_sales_access,
+      knowledge_base_access,
     } = req.body;
 
     // Check if permission record exists for this user
@@ -5119,8 +6057,8 @@ app.post('/poc/admin/updateUserPermissions', authenticateToken, async (req, res)
         `INSERT INTO user_permissions 
                 (emp_id, status_access, report_access, usecase_creation_access, 
                  all_status_access, sales_access, sales_admin, status_status_access, 
-                 sales_dashboard_access, all_sales_access)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+                 sales_dashboard_access, all_sales_access, knowledge_base_access,)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
         [
           emp_id,
           status_access,
@@ -5131,7 +6069,8 @@ app.post('/poc/admin/updateUserPermissions', authenticateToken, async (req, res)
           sales_admin,
           status_status_access,
           sales_dashboard_access,
-          all_sales_access
+          all_sales_access,
+          knowledge_base_access,
         ]
       );
     } else {
@@ -5147,6 +6086,7 @@ app.post('/poc/admin/updateUserPermissions', authenticateToken, async (req, res)
                     status_status_access = $8,
                     sales_dashboard_access = $9,
                     all_sales_access = $10,
+                    knowledge_base_access = $11,
                     updated_at = CURRENT_TIMESTAMP
                 WHERE emp_id = $1`,
         [
@@ -5159,7 +6099,8 @@ app.post('/poc/admin/updateUserPermissions', authenticateToken, async (req, res)
           sales_admin,
           status_status_access,
           sales_dashboard_access,
-          all_sales_access
+          all_sales_access,
+          knowledge_base_access,
         ]
       );
     }
@@ -5171,6 +6112,9 @@ app.post('/poc/admin/updateUserPermissions', authenticateToken, async (req, res)
     res.status(500).json({ error: 'Failed to update user permissions' });
   }
 });
+
+
+
 
 
 
