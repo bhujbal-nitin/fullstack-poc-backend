@@ -47,7 +47,7 @@ const pool = new Pool({
   // database: process.env.DB_NAME || "msp_db_poc1",
   // database: process.env.DB_NAME || "statusbot_poc_06_01",
   // database: process.env.DB_NAME || "statusbot_poc_28_01",
-  database: process.env.DB_NAME || "statusbot_poc_02_02",
+  database: process.env.DB_NAME || "statusbot_poc_18_03",
   // database: process.env.DB_NAME || "poc_bot",
   // password: process.env.DB_PASSWORD || "root",
   password: process.env.DB_PASSWORD || "nitin258",
@@ -291,201 +291,200 @@ const upload = multer({
 
 
 // Upload multiple files endpoint
-app.post('/poc/uploadKnowledgeMaterials',  authenticateToken,  upload.array('files', 10),  async (req, res) => {
+app.post('/poc/uploadKnowledgeMaterials', authenticateToken, upload.array('files', 10), async (req, res) => {
 
-    const { usecaseId, uploadedBy, uploadedById } = req.body;
-    const loggedInUser = req.user?.emp_name || req.user?.name || 'Unknown User';
-    const db = req.app.locals.db;
+  const { usecaseId, uploadedBy, uploadedById } = req.body;
+  const loggedInUser = req.user?.emp_name || req.user?.name || 'Unknown User';
+  const db = req.app.locals.db;
 
-    if (!usecaseId || !req.files?.length) {
-      return res.status(400).json({
-        success: false,
-        message: 'Missing usecaseId or files'
+  if (!usecaseId || !req.files?.length) {
+    return res.status(400).json({
+      success: false,
+      message: 'Missing usecaseId or files'
+    });
+  }
+
+  try {
+    const results = [];
+
+    // ===============================
+    // ✅ STEP 1: Save to DB
+    // ===============================
+    for (const file of req.files) {
+      const dbRes = await db.query(
+        `INSERT INTO knowledge_materials
+           (usecase_id, file_name, file_path, file_size, file_type, uploaded_by, uploaded_by_id, status)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,'active') RETURNING id`,
+        [
+          usecaseId,
+          file.filename,
+          file.path,
+          file.size,
+          file.mimetype,
+          uploadedBy || loggedInUser,
+          uploadedById || req.user?.emp_id
+        ]
+      );
+
+      results.push({
+        success: true,
+        fileId: dbRes.rows[0].id,
+        fileName: file.originalname
       });
     }
 
+    // ===============================
+    // ✅ STEP 2: Send to Git Machine
+    // ===============================
+    let gitSuccess = false;
+
     try {
-      const results = [];
+      const formData = new FormData();
+      formData.append('usecaseId', usecaseId);
+      formData.append('uploadedBy', uploadedBy || loggedInUser);
 
-      // ===============================
-      // ✅ STEP 1: Save to DB
-      // ===============================
-      for (const file of req.files) {
-        const dbRes = await db.query(
-          `INSERT INTO knowledge_materials
-           (usecase_id, file_name, file_path, file_size, file_type, uploaded_by, uploaded_by_id, status)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,'active') RETURNING id`,
-          [
-            usecaseId,
-            file.filename,
-            file.path,
-            file.size,
-            file.mimetype,
-            uploadedBy || loggedInUser,
-            uploadedById || req.user?.emp_id
-          ]
-        );
+      req.files.forEach(file => {
+        formData.append('files', fs.createReadStream(file.path));
+      });
 
-        results.push({
-          success: true,
-          fileId: dbRes.rows[0].id,
-          fileName: file.originalname
-        });
+      await axios.post(
+        'https://financebot.automationedge.com/poc/gitUploadKnowledgeMaterials',
+        formData,
+        {
+          headers: formData.getHeaders()
+        }
+      );
+
+      console.log('✅ Git Machine Sync Successful');
+      gitSuccess = true;
+
+    } catch (gitErr) {
+      console.error('⚠️ Git Machine Sync Failed:', gitErr.message);
+    }
+
+    // ===============================
+    // ✅ STEP 3: DELETE LOCAL FILES
+    // ===============================
+    try {
+      req.files.forEach(file => {
+        if (fs.existsSync(file.path)) {
+          fs.unlinkSync(file.path);
+          console.log(`🗑️ Deleted file: ${file.path}`);
+        }
+      });
+
+      // Delete entire usecase folder
+      const usecaseFolder = path.dirname(req.files[0].path);
+
+      if (fs.existsSync(usecaseFolder)) {
+        fs.rmSync(usecaseFolder, { recursive: true, force: true });
+        console.log(`🗑️ Deleted usecase folder: ${usecaseFolder}`);
       }
 
-      // ===============================
-      // ✅ STEP 2: Send to Git Machine
-      // ===============================
-      let gitSuccess = false;
+    } catch (deleteErr) {
+      console.error('❌ Cleanup Error:', deleteErr.message);
+    }
 
-      try {
-        const formData = new FormData();
-        formData.append('usecaseId', usecaseId);
-        formData.append('uploadedBy', uploadedBy || loggedInUser);
+    return res.json({
+      success: true,
+      message: gitSuccess
+        ? 'Files saved, synced to Git, and cleaned locally.'
+        : 'Files saved to DB. Git sync failed but local files cleaned.',
+      results
+    });
 
-        req.files.forEach(file => {
-          formData.append('files', fs.createReadStream(file.path));
-        });
+  } catch (err) {
 
-        await axios.post(
-          'https://financebot.automationedge.com/poc/gitUploadKnowledgeMaterials',
-          formData,
-          {
-            headers: formData.getHeaders()
-          }
-        );
+    console.error('❌ Upload Error:', err);
 
-        console.log('✅ Git Machine Sync Successful');
-        gitSuccess = true;
-
-      } catch (gitErr) {
-        console.error('⚠️ Git Machine Sync Failed:', gitErr.message);
-      }
-
-      // ===============================
-      // ✅ STEP 3: DELETE LOCAL FILES
-      // ===============================
+    // ===============================
+    // 🔥 Cleanup On Complete Failure
+    // ===============================
+    if (req.files) {
       try {
         req.files.forEach(file => {
           if (fs.existsSync(file.path)) {
             fs.unlinkSync(file.path);
-            console.log(`🗑️ Deleted file: ${file.path}`);
           }
         });
 
-        // Delete entire usecase folder
         const usecaseFolder = path.dirname(req.files[0].path);
-
         if (fs.existsSync(usecaseFolder)) {
           fs.rmSync(usecaseFolder, { recursive: true, force: true });
-          console.log(`🗑️ Deleted usecase folder: ${usecaseFolder}`);
         }
 
-      } catch (deleteErr) {
-        console.error('❌ Cleanup Error:', deleteErr.message);
+      } catch (cleanupErr) {
+        console.error('❌ Failure Cleanup Error:', cleanupErr.message);
       }
-
-      return res.json({
-        success: true,
-        message: gitSuccess
-          ? 'Files saved, synced to Git, and cleaned locally.'
-          : 'Files saved to DB. Git sync failed but local files cleaned.',
-        results
-      });
-
-    } catch (err) {
-
-      console.error('❌ Upload Error:', err);
-
-      // ===============================
-      // 🔥 Cleanup On Complete Failure
-      // ===============================
-      if (req.files) {
-        try {
-          req.files.forEach(file => {
-            if (fs.existsSync(file.path)) {
-              fs.unlinkSync(file.path);
-            }
-          });
-
-          const usecaseFolder = path.dirname(req.files[0].path);
-          if (fs.existsSync(usecaseFolder)) {
-            fs.rmSync(usecaseFolder, { recursive: true, force: true });
-          }
-
-        } catch (cleanupErr) {
-          console.error('❌ Failure Cleanup Error:', cleanupErr.message);
-        }
-      }
-
-      return res.status(500).json({
-        success: false,
-        message: 'Upload failed',
-        error: err.message
-      });
     }
+
+    return res.status(500).json({
+      success: false,
+      message: 'Upload failed',
+      error: err.message
+    });
   }
+}
 );
 
 
 
 // Download file endpoint
-app.get('/poc/downloadKnowledgeMaterial/:fileId',  authenticateToken,  async (req, res) => {
+app.get('/poc/downloadKnowledgeMaterial/:fileId', authenticateToken, async (req, res) => {
 
-    try {
-      const fileId = Number(req.params.fileId);
-      const db = req.app.locals.db;
+  try {
+    const fileId = Number(req.params.fileId);
+    const db = req.app.locals.db;
 
-      const result = await db.query(
-        `SELECT usecase_id, file_name 
+    const result = await db.query(
+      `SELECT usecase_id, file_name 
          FROM knowledge_materials 
          WHERE id = $1`,
-        [fileId]
-      );
+      [fileId]
+    );
 
-      if (!result.rows.length) {
-        return res.status(404).json({
-          success: false,
-          message: 'File record not found in DB'
-        });
-      }
-
-      const { usecase_id, file_name } = result.rows[0];
-
-      console.log(`⬇️ Requesting file from Git machine: ${file_name}`);
-
-      // Call Git Machine API
-      const response = await axios.get(
-        `https://financebot.automationedge.com/poc/gitDownloadKnowledgeMaterial`,
-        {
-          params: {
-            usecaseId: usecase_id,
-            fileName: file_name
-          },
-          responseType: 'stream'
-        }
-      );
-
-      // Set headers
-      res.setHeader(
-        'Content-Disposition',
-        `attachment; filename="${file_name}"`
-      );
-
-      // Pipe stream directly to client
-      response.data.pipe(res);
-
-    } catch (err) {
-      console.error('❌ Download Error (DB Machine):', err.message);
-      return res.status(500).json({
+    if (!result.rows.length) {
+      return res.status(404).json({
         success: false,
-        message: 'Download failed',
-        error: err.message
+        message: 'File record not found in DB'
       });
     }
-  }
-);
 
+    const { usecase_id, file_name } = result.rows[0];
+
+    console.log(`⬇️ Requesting file from Git machine: ${file_name}`);
+
+    // Call Git Machine API
+    const response = await axios.get(
+      `https://financebot.automationedge.com/poc/gitDownloadKnowledgeMaterial`,
+      {
+        params: {
+          usecaseId: usecase_id,
+          fileName: file_name
+        },
+        responseType: 'stream'
+      }
+    );
+
+    // Set headers
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${file_name}"`
+    );
+
+    // Pipe stream directly to client
+    response.data.pipe(res);
+
+  } catch (err) {
+    console.error('❌ Download Error (DB Machine):', err.message);
+    return res.status(500).json({
+      success: false,
+      message: 'Download failed',
+      error: err.message
+    });
+  }
+}
+);
 
 
 // Get files for usecase endpoint
@@ -702,6 +701,150 @@ app.get('/poc/knowledgeBaseFiles/:usecaseId', authenticateToken, async (req, res
 // });
 
 // Get Usecase details for Knowledge Base
+// app.get('/poc/knowledgeBaseUsecases', authenticateToken, async (req, res) => {
+//   try {
+//     const db = req.app.locals.db;
+//     if (!db) {
+//       return res.status(500).json({
+//         success: false,
+//         message: 'Database connection error'
+//       });
+//     }
+
+//     const { search } = req.query;
+
+//     // 🔐 User info from token
+//     const userId = req.user.emp_id || req.user.id;
+//     const userName = req.user.emp_name || req.user.name;
+
+//     // 🔐 Fetch permissions
+//     const permissionQuery = `
+//       SELECT 
+//         status_access,
+//         admin_access
+//       FROM public.user_permissions
+//       WHERE emp_id = $1
+//     `;
+//     const permissionResult = await db.query(permissionQuery, [userId]);
+
+//     let hasStatusAccess = false;
+//     let hasAdminAccess = false;
+
+//     if (permissionResult.rows.length > 0) {
+//       hasStatusAccess = permissionResult.rows[0].status_access;
+//       hasAdminAccess = permissionResult.rows[0].admin_access;
+//     }
+
+//     // 🚫 No access at all — return empty
+//     if (!hasStatusAccess && !hasAdminAccess) {
+//       return res.json({
+//         success: true,
+//         data: [],
+//         total: 0
+//       });
+//     }
+
+//     // 🧠 Base query — no permission filtering needed, all users with access see all usecases
+//     let query = `
+//       SELECT 
+//         pd.poc_prj_id AS "Usecase Id",
+//         pd.client_name AS "Client Name",
+//         COALESCE(NULLIF(TRIM(pe.partner_name), ''), '-') AS "Partner Name",
+//         pd.poc_prj_name AS "Usecase Name",
+//         pd.status,
+//         pd.start_date,
+//         pd.excepted_end_date,
+//         pd.region,
+//         pd.poc_type,
+//         pd.department_name,
+//         pd.description,
+//         pd.tag,
+//         pe.actual_start_date
+//       FROM poc_prj_details pd
+//       LEFT JOIN poc_prj_efforts pe 
+//         ON pd.poc_prj_id = pe.poc_prj_id
+//       WHERE 1=1
+//     `;
+
+//     const queryParams = [];
+//     let paramCounter = 1;
+
+//     // 🔎 Search filter
+//     if (search) {
+//       query += `
+//         AND (
+//           pd.poc_prj_id ILIKE $${paramCounter}
+//           OR pd.client_name ILIKE $${paramCounter}
+//           OR pd.poc_prj_name ILIKE $${paramCounter}
+//           OR pe.partner_name ILIKE $${paramCounter}
+//         )
+//       `;
+//       queryParams.push(`%${search}%`);
+//       paramCounter++;
+//     }
+
+//     // 🧮 GROUP BY
+//     query += `
+//       GROUP BY 
+//         pd.poc_prj_id,
+//         pd.client_name,
+//         pd.poc_prj_name,
+//         pd.status,
+//         pd.start_date,
+//         pd.excepted_end_date,
+//         pd.region,
+//         pd.poc_type,
+//         pd.department_name,
+//         pd.description,
+//         pd.tag,
+//         pe.partner_name,
+//         pe.actual_start_date
+//     `;
+
+//     // ⬇️ ORDER BY
+//     query += `
+//       ORDER BY
+//         CASE WHEN pe.actual_start_date IS NULL THEN 1 ELSE 0 END,
+//         pe.actual_start_date DESC,
+//         pd.poc_prj_id ASC
+//     `;
+
+//     // ▶️ Execute query
+//     const { rows: usecases } = await db.query(query, queryParams);
+
+//     // 📎 Check file availability
+//     for (const usecase of usecases) {
+//       const fileResult = await db.query(
+//         `
+//           SELECT COUNT(*) AS file_count
+//           FROM knowledge_materials
+//           WHERE usecase_id = $1
+//             AND status = 'active'
+//         `,
+//         [usecase['Usecase Id']]
+//       );
+
+//       usecase.hasFiles = parseInt(fileResult.rows[0].file_count, 10) > 0;
+//     }
+
+//     // ✅ Response
+//     res.json({
+//       success: true,
+//       data: usecases,
+//       total: usecases.length
+//     });
+
+//   } catch (error) {
+//     console.error('❌ Error in /poc/knowledgeBaseUsecases:', error);
+//     res.status(500).json({
+//       success: false,
+//       message: 'Error fetching usecases',
+//       error: error.message
+//     });
+//   }
+// });
+
+// Get Usecase details for Knowledge Base
 app.get('/poc/knowledgeBaseUsecases', authenticateToken, async (req, res) => {
   try {
     const db = req.app.locals.db;
@@ -714,30 +857,31 @@ app.get('/poc/knowledgeBaseUsecases', authenticateToken, async (req, res) => {
 
     const { search } = req.query;
 
-    // 🔐 User info from token
+    // 🔐 User info from token - this already contains user data
     const userId = req.user.emp_id || req.user.id;
     const userName = req.user.emp_name || req.user.name;
+    const userDept = req.user.department_name; // Get department from token
 
     // 🔐 Fetch permissions
     const permissionQuery = `
       SELECT 
-        status_access,
+        knowledge_base_access,
         admin_access
       FROM public.user_permissions
       WHERE emp_id = $1
     `;
     const permissionResult = await db.query(permissionQuery, [userId]);
 
-    let hasStatusAccess = false;
+    let hasKnowledgeBaseAccess = false;
     let hasAdminAccess = false;
 
     if (permissionResult.rows.length > 0) {
-      hasStatusAccess = permissionResult.rows[0].status_access;
+      hasKnowledgeBaseAccess = permissionResult.rows[0].knowledge_base_access;
       hasAdminAccess = permissionResult.rows[0].admin_access;
     }
 
     // 🚫 No access at all — return empty
-    if (!hasStatusAccess && !hasAdminAccess) {
+    if (!hasKnowledgeBaseAccess && !hasAdminAccess) {
       return res.json({
         success: true,
         data: [],
@@ -745,7 +889,7 @@ app.get('/poc/knowledgeBaseUsecases', authenticateToken, async (req, res) => {
       });
     }
 
-    // 🧠 Base query — no permission filtering needed, all users with access see all usecases
+    // 🧠 Base query
     let query = `
       SELECT 
         pd.poc_prj_id AS "Usecase Id",
@@ -769,6 +913,14 @@ app.get('/poc/knowledgeBaseUsecases', authenticateToken, async (req, res) => {
 
     const queryParams = [];
     let paramCounter = 1;
+
+    // 🏢 Add department-specific filter for KB department - using token data
+    if (userDept === 'KB' || userDept === 'sales') {
+      query += ` 
+      AND pd.poc_type = 'POC'
+      AND pd.status IN ('Completed', 'Converted', 'Closed')
+      `;
+    }
 
     // 🔎 Search filter
     if (search) {
@@ -1080,6 +1232,7 @@ app.get('/poc/getSummaryReport', authenticateToken, async (req, res) => {
     });
   }
 });
+
 // Get all POCs - FIXED with type casting
 app.get("/poc/getAllPocs", authenticateToken, async (req, res) => {
   const client = await pool.connect();
@@ -1543,7 +1696,9 @@ app.get("/poc/permissions/:emp_id", authenticateToken, async (req, res) => {
         status_status_access,
         all_sales_access,
         admin_access,
-        knowledge_base_access
+        knowledge_base_access,
+        knowledge_base_upload_access,
+        sales_report_card_access
       FROM public.user_permissions
       WHERE emp_id = $1;
     `;
@@ -1558,8 +1713,10 @@ app.get("/poc/permissions/:emp_id", authenticateToken, async (req, res) => {
         status_access: false,
         sales_access: false,
         all_status_access: false,
+        knowledge_base_upload_access: false,
         leave_access: false,
-        sales_admin: false  // Default to false if no record found
+        sales_admin: false,  // Default to false if no record found
+        sales_report_card_access: false, // Default to false if no record found
       });
     }
 
@@ -1790,60 +1947,136 @@ app.get("/poc/getStatusByDate", authenticateToken, async (req, res) => {
 });
 
 
+
+// app.post("/poc/saveDailyStatus", authenticateToken, async (req, res) => {
+//   const client = await pool.connect();
+//   try {
+//     const {
+//       date,
+//       usecaseId,
+//       leadIds,
+//       status,
+//       workingHours,
+//       workingMinutes,
+//       description,
+//       employeeId,
+//       employeeName,
+//       usecaseName,
+//       leadNames
+//     } = req.body;
+
+//     // 🔹 Build "HH:MM" string for hrs
+//     const formattedHrs = `${String(workingHours || 0).padStart(2, "0")}:${String(workingMinutes || 0).padStart(2, "0")}`;
+
+//     console.log("Formatted hrs:", formattedHrs);
+
+//     await client.query("BEGIN");
+
+//     const insertStatusQuery = `
+//       INSERT INTO public.daily_poc_prj_status (
+//         emp_name, emp_id, poc_prj_id, poc_date,
+//         status, hrs, leads_email, department_name
+//       )
+//       VALUES ($1,$2,$3,$4,$5,$6,$7,'PCS ROW')
+//       RETURNING *;
+//     `;
+
+//     const result = await client.query(insertStatusQuery, [
+//       employeeName,   // emp_name
+//       employeeId,     // emp_id
+//       usecaseId,      // poc_prj_id
+//       date,           // poc_date
+//       description,         // status
+//       formattedHrs,   // hrs in HH:MM
+//       leadIds         // leads_email (comma separated)
+//     ]);
+
+//     await client.query("COMMIT");
+
+//     res.status(201).json({
+//       message: "Daily POC status saved successfully",
+//       data: result.rows[0]
+//     });
+
+//   } catch (err) {
+//     await client.query("ROLLBACK");
+//     console.error("Error saving daily POC status:", err);
+//     res.status(500).json({ message: "Internal server error" });
+//   } finally {
+//     client.release();
+//   }
+// });
+
+
+
+
+
+// Update daily status
+
+const formatTime = (hours = 0, minutes = 0) => {
+  const hh = String(hours).padStart(2, "0");
+  const mm = String(minutes).padStart(2, "0");
+  const decimal = Number(hours) + (Number(minutes) / 60);
+  return { formatted: `${hh}:${mm}`, decimal };
+};
+
 app.post("/poc/saveDailyStatus", authenticateToken, async (req, res) => {
+  const {
+    date, usecaseId, leadIds, status, workingHours,
+    workingMinutes, description, employeeId, employeeName
+  } = req.body;
+
+  // 1. Basic Validation
+  if (!usecaseId || !employeeId || !date) {
+    return res.status(400).json({ message: "Missing required fields" });
+  }
+
   const client = await pool.connect();
+
   try {
-    const {
-      date,
-      usecaseId,
-      leadIds,
-      status,
-      workingHours,
-      workingMinutes,
-      description,
-      employeeId,
-      employeeName,
-      usecaseName,
-      leadNames
-    } = req.body;
-
-    // 🔹 Build "HH:MM" string for hrs
-    const formattedHrs = `${String(workingHours || 0).padStart(2, "0")}:${String(workingMinutes || 0).padStart(2, "0")}`;
-
-    console.log("Formatted hrs:", formattedHrs);
+    const { formatted, decimal } = formatTime(workingHours, workingMinutes);
 
     await client.query("BEGIN");
 
-    const insertStatusQuery = `
+    // 2. Insert Daily Status
+    const insertQuery = `
       INSERT INTO public.daily_poc_prj_status (
-        emp_name, emp_id, poc_prj_id, poc_date,
+        emp_name, emp_id, poc_prj_id, poc_date, 
         status, hrs, leads_email, department_name
       )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,'PCS ROW')
+      VALUES ($1, $2, $3, $4, $5, $6, $7, 'PCS ROW')
       RETURNING *;
     `;
 
-    const result = await client.query(insertStatusQuery, [
-      employeeName,   // emp_name
-      employeeId,     // emp_id
-      usecaseId,      // poc_prj_id
-      date,           // poc_date
-      description,         // status
-      formattedHrs,   // hrs in HH:MM
-      leadIds         // leads_email (comma separated)
+    const insertResult = await client.query(insertQuery, [
+      employeeName, employeeId, usecaseId, date,
+      description, formatted, leadIds
     ]);
+
+    // 3. Update Total Efforts
+    const updateQuery = `
+      UPDATE public.poc_prj_efforts
+      SET total_hours_spent = COALESCE(total_hours_spent, 0) + $1
+      WHERE poc_prj_id = $2;
+    `;
+
+    await client.query(updateQuery, [decimal, usecaseId]);
 
     await client.query("COMMIT");
 
-    res.status(201).json({
-      message: "Daily POC status saved successfully",
-      data: result.rows[0]
+    return res.status(201).json({
+      message: "Daily POC status saved and efforts updated successfully",
+      data: insertResult.rows[0]
     });
 
-  } catch (err) {
+  } catch (error) {
     await client.query("ROLLBACK");
-    console.error("Error saving daily POC status:", err);
-    res.status(500).json({ message: "Internal server error" });
+    console.error("Critical Error in saveDailyStatus:", error.message);
+
+    return res.status(500).json({
+      message: "Internal server error",
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
   } finally {
     client.release();
   }
@@ -1851,9 +2084,6 @@ app.post("/poc/saveDailyStatus", authenticateToken, async (req, res) => {
 
 
 
-
-
-// Update daily status
 app.put("/poc/empupdateStatus/:id", authenticateToken, async (req, res) => {
   const client = await pool.connect();
   try {
@@ -1969,8 +2199,6 @@ app.delete("/poc/deleteStatus/:id", authenticateToken, async (req, res) => {
 
 
 
-
-
 app.get("/poc/getUsecases", authenticateToken, async (req, res) => {
   try {
     // Get user info from token
@@ -2066,9 +2294,6 @@ app.get("/poc/getUsecases", authenticateToken, async (req, res) => {
 
 
 
-
-
-
 // Get distinct status types
 app.get('/poc/getStatusTypes', authenticateToken, async (req, res) => {
   try {
@@ -2085,8 +2310,6 @@ app.get('/poc/getStatusTypes', authenticateToken, async (req, res) => {
     res.status(500).json({ error: 'Failed to fetch status types' });
   }
 });
-
-
 
 
 // SELECT DISTINCT regexp_replace(poc_prj_id, '[-_].*$', '') AS type
@@ -2110,26 +2333,79 @@ app.get("/poc/getPocTypes", authenticateToken, async (req, res) => {
 
 
 // Get reports data
+// app.get("/poc/getReports", authenticateToken, async (req, res) => {
+//   try {
+//     const result = await pool.query(`
+//     SELECT
+//     poc_prj_id AS id,
+//     poc_prj_name,
+//     assigned_to,
+//     sales_person AS "salesPerson",
+//     region,
+//     poc_type,
+//     start_date,
+//     excepted_end_date,
+//     client_name AS "companyName",
+//     partner_client_own,
+//     description AS usecase,
+//     status,
+//     partner_client_own
+// FROM public.poc_prj_details
+// WHERE poc_prj_id IS NOT NULL
+// ORDER BY start_date DESC;
+
+//     `);
+
+//     res.json(result.rows);
+//   } catch (err) {
+//     console.error("Error fetching reports:", err);
+//     res.status(500).json({ message: "Internal server error" });
+//   }
+// });
+
 app.get("/poc/getReports", authenticateToken, async (req, res) => {
   try {
     const result = await pool.query(`
-    SELECT
-    poc_prj_id AS id,
-    poc_prj_name,
-    assigned_to,
-    sales_person AS "salesPerson",
-    region,
-    poc_type,
-    start_date,
-    excepted_end_date,
-    client_name AS "companyName",
-    description AS usecase,
-    status,
-    partner_client_own
-FROM public.poc_prj_details
-WHERE poc_prj_id IS NOT NULL
-ORDER BY start_date DESC;
- 
+      SELECT 
+        -- Keep all original fields with their original names for backward compatibility
+        p.poc_prj_id as id,
+        p.poc_prj_name,
+        p.assigned_to,
+        p.sales_person as "salesPerson",
+        p.region,
+        p.poc_type,
+        p.start_date,
+        p.excepted_end_date,
+        p.client_name as "companyName",
+        p.partner_client_own,
+        p.description as usecase,
+        p.status,
+        
+        -- Add all new fields from the other API with names that match your frontend expectations
+        p.poc_prj_name as "pocName",
+        p.client_name as "entityName",
+        p.partner_client_own as "entityType",
+        p.is_billable as "isBillable",
+        p.spoc_email_address as "spocEmail",
+        p.spoc_designation as "spocDesignation",
+        p.tag as "tags",
+        p.created_by as "createdBy",
+        p.remarks as "remark",
+        
+        -- Effort tracking fields
+        e.actual_start_date as "actualStartDate",
+        e.actual_end_date as "actualEndDate",
+        e.estimated_efforts as "estimatedEfforts",
+        e.approved_by as "approvedBy",
+        e.total_efforts as "totalEfforts",
+        e.variance_days as "varianceDays",
+        e.partner_name as "partnerName",
+        COALESCE(e.total_efforts, 0) as "totalWorkedHours"
+        
+      FROM poc_prj_details p
+      LEFT JOIN poc_prj_efforts e ON p.poc_prj_id::text = e.poc_prj_id::text
+      WHERE p.poc_prj_id IS NOT NULL
+      ORDER BY p.start_date DESC
     `);
 
     res.json(result.rows);
@@ -2138,8 +2414,6 @@ ORDER BY start_date DESC;
     res.status(500).json({ message: "Internal server error" });
   }
 });
-
-
 
 
 app.post("/poc/api/auth/login", async (req, res) => {
@@ -2203,8 +2477,8 @@ app.post("/poc/api/auth/login", async (req, res) => {
       department_name: user.department_name
     };
 
-    // const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: "1h" });
-    const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: "1m" });
+    const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: "1h" });
+    // const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: "1m" });
 
     // ✅ ADD department_name to response
     const userResponse = {
@@ -2387,19 +2661,7 @@ app.get("/poc/all", authenticateToken, async (req, res) => {
         e.total_efforts as "totalEfforts",
         e.variance_days as "varianceDays",
         e.partner_name as "partnerName",
-        COALESCE((
-          SELECT SUM(
-            CASE 
-              WHEN hrs ~ '^[0-9]+:[0-9]+$' 
-                THEN split_part(hrs, ':', 1)::int + split_part(hrs, ':', 2)::int / 60.0
-              WHEN hrs ~ '^[0-9]+$'
-                THEN hrs::int
-              ELSE 0
-            END
-          ) AS total_hours
-          FROM public.daily_poc_prj_status
-          WHERE poc_prj_id = p.poc_prj_id::text
-        ), 0) as "totalWorkedHours"
+        COALESCE(e.total_hours_spent, 0) as "totalWorkedHours"
       FROM poc_prj_details p
       LEFT JOIN poc_prj_efforts e ON p.poc_prj_id::text = e.poc_prj_id::text
       ORDER BY p.poc_prj_id
@@ -4714,7 +4976,7 @@ Note: This leave was revoked by User ID: ${revokerId}
 
 ////-----------------------salesss
 
-app.get("/poc/sales/all", authenticateToken, async (req, res) => {
+app.get("/poc/sc/all", authenticateToken, async (req, res) => {
   try {
     const empName = req.user.emp_name;
     const role = req.user.role;
@@ -4859,7 +5121,7 @@ async function generateNextsales(prefix) {
     return `${prefix}-01`;
   }
 }
-app.post("/poc/sales/savepocprjid", authenticateToken, async (req, res) => {
+app.post("/poc/sc/savepocprjid", authenticateToken, async (req, res) => {
   const client = await pool.connect();
   try {
     /* =========================
@@ -5000,7 +5262,7 @@ app.post("/poc/sales/savepocprjid", authenticateToken, async (req, res) => {
 
 
 
-app.get("/poc/sales/getAllAssignTo", authenticateToken, async (req, res) => {
+app.get("/poc/sc/getAllAssignTo", authenticateToken, async (req, res) => {
   const { department_name } = req.query;
   const role = req.user.role;
 
@@ -5043,7 +5305,7 @@ app.get("/poc/sales/getAllAssignTo", authenticateToken, async (req, res) => {
   }
 });
 
-app.put("/poc/sales/updateStatus/:id", authenticateToken, async (req, res) => {
+app.put("/poc/sc/updateStatus/:id", authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
     const { status } = req.body;
@@ -5115,7 +5377,7 @@ app.put("/poc/sales/updateStatus/:id", authenticateToken, async (req, res) => {
   }
 });
 
-app.put('/poc/sales/updateRemark/:id', async (req, res) => {
+app.put('/poc/sc/updateRemark/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const { remark } = req.body;
@@ -5149,7 +5411,7 @@ app.put('/poc/sales/updateRemark/:id', async (req, res) => {
     });
   }
 });
-app.delete("/poc/sales/delete/:id", authenticateToken, async (req, res) => {
+app.delete("/poc/sc/delete/:id", authenticateToken, async (req, res) => {
   const client = await pool.connect();
   try {
     const { id } = req.params;
@@ -5186,7 +5448,7 @@ app.delete("/poc/sales/delete/:id", authenticateToken, async (req, res) => {
     client.release();
   }
 });
-app.put("/poc/sales/update/:id", authenticateToken, async (req, res) => {
+app.put("/poc/sc/update/:id", authenticateToken, async (req, res) => {
   try {
     // 🔹 POC ID must be INTEGER
     const id = parseInt(req.params.id, 10);
@@ -5298,7 +5560,7 @@ app.put("/poc/sales/update/:id", authenticateToken, async (req, res) => {
   }
 });
 
-app.get("/poc/sales/getUsecases", authenticateToken, async (req, res) => {
+app.get("/poc/sc/getUsecases", authenticateToken, async (req, res) => {
   try {
     const result = await pool.query(`
       SELECT
@@ -5338,7 +5600,7 @@ app.get("/poc/sales/getUsecases", authenticateToken, async (req, res) => {
     res.status(500).json({ message: "Internal server error" });
   }
 });
-app.get("/poc/sales/getLeads", authenticateToken, async (req, res) => {
+app.get("/poc/sc/getLeads", authenticateToken, async (req, res) => {
   try {
     const departmentName = req.user.department_name;
 
@@ -5378,7 +5640,7 @@ app.get("/poc/sales/getLeads", authenticateToken, async (req, res) => {
     });
   }
 });
-app.post("/poc/sales/saveDailyStatus", authenticateToken, async (req, res) => {
+app.post("/poc/sc/saveDailyStatus", authenticateToken, async (req, res) => {
   const client = await pool.connect();
   try {
     const {
@@ -5436,7 +5698,7 @@ app.post("/poc/sales/saveDailyStatus", authenticateToken, async (req, res) => {
     client.release();
   }
 });
-app.put("/poc/sales/empupdateStatus/:id", authenticateToken, async (req, res) => {
+app.put("/poc/sc/empupdateStatus/:id", authenticateToken, async (req, res) => {
   const client = await pool.connect();
   try {
     const { id } = req.params;
@@ -5507,7 +5769,7 @@ app.put("/poc/sales/empupdateStatus/:id", authenticateToken, async (req, res) =>
   }
 });
 
-app.delete("/poc/sales/deleteStatus/:id", authenticateToken, async (req, res) => {
+app.delete("/poc/sc/deleteStatus/:id", authenticateToken, async (req, res) => {
   const client = await pool.connect();
   try {
     const { id } = req.params;
@@ -5546,7 +5808,7 @@ app.delete("/poc/sales/deleteStatus/:id", authenticateToken, async (req, res) =>
     client.release();
   }
 });
-app.get("/poc/sales/getStatusByDate", authenticateToken, async (req, res) => {
+app.get("/poc/sc/getStatusByDate", authenticateToken, async (req, res) => {
   const client = await pool.connect();
   try {
     const { date } = req.query;
@@ -6004,6 +6266,8 @@ app.get('/poc/admin/getUserPermissions/:empId', authenticateToken, async (req, r
         sales_dashboard_access: false,
         all_sales_access: false,
         knowledge_base_access: false,
+        knowledge_base_upload_access: false,
+        sales_report_card_access: false,
       });
     }
 
@@ -6020,6 +6284,8 @@ app.get('/poc/admin/getUserPermissions/:empId', authenticateToken, async (req, r
       sales_dashboard_access: permissions.sales_dashboard_access || false,
       all_sales_access: permissions.all_sales_access || false,
       knowledge_base_access: permissions.knowledge_base_access || false,
+      knowledge_base_upload_access: permissions.knowledge_base_upload_access || false,
+      sales_report_card_access: permissions.sales_report_card_access || false,
     });
 
   } catch (error) {
@@ -6043,6 +6309,8 @@ app.post('/poc/admin/updateUserPermissions', authenticateToken, async (req, res)
       sales_dashboard_access,
       all_sales_access,
       knowledge_base_access,
+      knowledge_base_upload_access,
+      sales_report_card_access,
     } = req.body;
 
     // Check if permission record exists for this user
@@ -6057,8 +6325,9 @@ app.post('/poc/admin/updateUserPermissions', authenticateToken, async (req, res)
         `INSERT INTO user_permissions 
                 (emp_id, status_access, report_access, usecase_creation_access, 
                  all_status_access, sales_access, sales_admin, status_status_access, 
-                 sales_dashboard_access, all_sales_access, knowledge_base_access,)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+                 sales_dashboard_access, all_sales_access, knowledge_base_access, 
+                 knowledge_base_upload_access, sales_report_card_access)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
         [
           emp_id,
           status_access,
@@ -6071,6 +6340,8 @@ app.post('/poc/admin/updateUserPermissions', authenticateToken, async (req, res)
           sales_dashboard_access,
           all_sales_access,
           knowledge_base_access,
+          knowledge_base_upload_access,
+          sales_report_card_access,
         ]
       );
     } else {
@@ -6087,6 +6358,8 @@ app.post('/poc/admin/updateUserPermissions', authenticateToken, async (req, res)
                     sales_dashboard_access = $9,
                     all_sales_access = $10,
                     knowledge_base_access = $11,
+                    knowledge_base_upload_access = $12,
+                    sales_report_card_access = $13,
                     updated_at = CURRENT_TIMESTAMP
                 WHERE emp_id = $1`,
         [
@@ -6101,6 +6374,8 @@ app.post('/poc/admin/updateUserPermissions', authenticateToken, async (req, res)
           sales_dashboard_access,
           all_sales_access,
           knowledge_base_access,
+          knowledge_base_upload_access,
+          sales_report_card_access,
         ]
       );
     }
