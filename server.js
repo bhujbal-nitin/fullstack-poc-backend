@@ -44,10 +44,8 @@ const pool = new Pool({
   user: process.env.DB_USER || "postgres",
   host: process.env.DB_HOST || "localhost",
   // database: process.env.DB_NAME || "statusbot_poc",
-  // database: process.env.DB_NAME || "msp_db_poc1",
-  // database: process.env.DB_NAME || "statusbot_poc_06_01",
-  // database: process.env.DB_NAME || "statusbot_poc_28_01",
-  database: process.env.DB_NAME || "statusbot_poc_18_03",
+  // database: process.env.DB_NAME || "statusbot_poc_18_03",
+  database: "statusbot_poc_27_04",
   // database: process.env.DB_NAME || "poc_bot",
   // password: process.env.DB_PASSWORD || "root",
   password: process.env.DB_PASSWORD || "nitin258",
@@ -140,7 +138,7 @@ const execPromise = (cmd, options = {}) =>
 
 
 const KB_ROOT = path.resolve(
-  'C:/Users/nitin.bhujbal/Documents/FullStack-POC/KnowledgeBase'
+  'D:/POC/KnowledgeBase'
 );
 
 const KNOWLEDGE_BASE_ROOT = path.join(KB_ROOT, 'uploads');
@@ -234,15 +232,13 @@ async function disableSparseCheckout() {
 
 // ===== Knowledge Base Repo Paths =====
 const KB_REPO_PATH = path.resolve(
-  'C:/Users/nitin.bhujbal/Documents/FullStack-POC/KnowledgeBase'
+  'D:/POC/KnowledgeBase'
 );
 
 // ADD THIS LINE - define your Git repository URL
 const KB_REPO_URL = 'http://10.41.5.6/pocteamgroup/poc_knowledge_base_nitin.git'; // e.g., 'https://github.com/yourusername/KnowledgeBase.git'
 
 const KB_UPLOADS_PATH = path.join(KB_REPO_PATH, 'uploads');
-
-
 
 // Configure multer for file upload
 const storage = multer.diskStorage({
@@ -487,6 +483,7 @@ app.get('/poc/downloadKnowledgeMaterial/:fileId', authenticateToken, async (req,
 );
 
 
+
 // Get files for usecase endpoint
 app.get('/poc/knowledgeBaseFiles/:usecaseId', authenticateToken, async (req, res) => {
   try {
@@ -700,154 +697,10 @@ app.get('/poc/knowledgeBaseFiles/:usecaseId', authenticateToken, async (req, res
 //   }
 // });
 
-// Get Usecase details for Knowledge Base
-// app.get('/poc/knowledgeBaseUsecases', authenticateToken, async (req, res) => {
-//   try {
-//     const db = req.app.locals.db;
-//     if (!db) {
-//       return res.status(500).json({
-//         success: false,
-//         message: 'Database connection error'
-//       });
-//     }
-
-//     const { search } = req.query;
-
-//     // 🔐 User info from token
-//     const userId = req.user.emp_id || req.user.id;
-//     const userName = req.user.emp_name || req.user.name;
-
-//     // 🔐 Fetch permissions
-//     const permissionQuery = `
-//       SELECT 
-//         status_access,
-//         admin_access
-//       FROM public.user_permissions
-//       WHERE emp_id = $1
-//     `;
-//     const permissionResult = await db.query(permissionQuery, [userId]);
-
-//     let hasStatusAccess = false;
-//     let hasAdminAccess = false;
-
-//     if (permissionResult.rows.length > 0) {
-//       hasStatusAccess = permissionResult.rows[0].status_access;
-//       hasAdminAccess = permissionResult.rows[0].admin_access;
-//     }
-
-//     // 🚫 No access at all — return empty
-//     if (!hasStatusAccess && !hasAdminAccess) {
-//       return res.json({
-//         success: true,
-//         data: [],
-//         total: 0
-//       });
-//     }
-
-//     // 🧠 Base query — no permission filtering needed, all users with access see all usecases
-//     let query = `
-//       SELECT 
-//         pd.poc_prj_id AS "Usecase Id",
-//         pd.client_name AS "Client Name",
-//         COALESCE(NULLIF(TRIM(pe.partner_name), ''), '-') AS "Partner Name",
-//         pd.poc_prj_name AS "Usecase Name",
-//         pd.status,
-//         pd.start_date,
-//         pd.excepted_end_date,
-//         pd.region,
-//         pd.poc_type,
-//         pd.department_name,
-//         pd.description,
-//         pd.tag,
-//         pe.actual_start_date
-//       FROM poc_prj_details pd
-//       LEFT JOIN poc_prj_efforts pe 
-//         ON pd.poc_prj_id = pe.poc_prj_id
-//       WHERE 1=1
-//     `;
-
-//     const queryParams = [];
-//     let paramCounter = 1;
-
-//     // 🔎 Search filter
-//     if (search) {
-//       query += `
-//         AND (
-//           pd.poc_prj_id ILIKE $${paramCounter}
-//           OR pd.client_name ILIKE $${paramCounter}
-//           OR pd.poc_prj_name ILIKE $${paramCounter}
-//           OR pe.partner_name ILIKE $${paramCounter}
-//         )
-//       `;
-//       queryParams.push(`%${search}%`);
-//       paramCounter++;
-//     }
-
-//     // 🧮 GROUP BY
-//     query += `
-//       GROUP BY 
-//         pd.poc_prj_id,
-//         pd.client_name,
-//         pd.poc_prj_name,
-//         pd.status,
-//         pd.start_date,
-//         pd.excepted_end_date,
-//         pd.region,
-//         pd.poc_type,
-//         pd.department_name,
-//         pd.description,
-//         pd.tag,
-//         pe.partner_name,
-//         pe.actual_start_date
-//     `;
-
-//     // ⬇️ ORDER BY
-//     query += `
-//       ORDER BY
-//         CASE WHEN pe.actual_start_date IS NULL THEN 1 ELSE 0 END,
-//         pe.actual_start_date DESC,
-//         pd.poc_prj_id ASC
-//     `;
-
-//     // ▶️ Execute query
-//     const { rows: usecases } = await db.query(query, queryParams);
-
-//     // 📎 Check file availability
-//     for (const usecase of usecases) {
-//       const fileResult = await db.query(
-//         `
-//           SELECT COUNT(*) AS file_count
-//           FROM knowledge_materials
-//           WHERE usecase_id = $1
-//             AND status = 'active'
-//         `,
-//         [usecase['Usecase Id']]
-//       );
-
-//       usecase.hasFiles = parseInt(fileResult.rows[0].file_count, 10) > 0;
-//     }
-
-//     // ✅ Response
-//     res.json({
-//       success: true,
-//       data: usecases,
-//       total: usecases.length
-//     });
-
-//   } catch (error) {
-//     console.error('❌ Error in /poc/knowledgeBaseUsecases:', error);
-//     res.status(500).json({
-//       success: false,
-//       message: 'Error fetching usecases',
-//       error: error.message
-//     });
-//   }
-// });
-
-// Get Usecase details for Knowledge Base
 app.get('/poc/knowledgeBaseUsecases', authenticateToken, async (req, res) => {
   try {
     const db = req.app.locals.db;
+
     if (!db) {
       return res.status(500).json({
         success: false,
@@ -857,10 +710,9 @@ app.get('/poc/knowledgeBaseUsecases', authenticateToken, async (req, res) => {
 
     const { search } = req.query;
 
-    // 🔐 User info from token - this already contains user data
+    // 🔐 User info from token
     const userId = req.user.emp_id || req.user.id;
-    const userName = req.user.emp_name || req.user.name;
-    const userDept = req.user.department_name; // Get department from token
+    const userDept = req.user.department_name;
 
     // 🔐 Fetch permissions
     const permissionQuery = `
@@ -880,7 +732,7 @@ app.get('/poc/knowledgeBaseUsecases', authenticateToken, async (req, res) => {
       hasAdminAccess = permissionResult.rows[0].admin_access;
     }
 
-    // 🚫 No access at all — return empty
+    // 🚫 No access at all
     if (!hasKnowledgeBaseAccess && !hasAdminAccess) {
       return res.json({
         success: true,
@@ -914,12 +766,10 @@ app.get('/poc/knowledgeBaseUsecases', authenticateToken, async (req, res) => {
     const queryParams = [];
     let paramCounter = 1;
 
-    // 🏢 Add department-specific filter for KB department - using token data
-    if (userDept === 'KB' || userDept === 'sales') {
-      query += ` 
-      AND pd.poc_type = 'POC'
-      AND pd.status IN ('Completed', 'Converted', 'Closed')
-      `;
+    // 🎯 CORE LOGIC
+    // If NOT PCS ROW → restrict to only POC
+    if (userDept !== 'PCS ROW') {
+      query += ` AND pd.poc_type = 'POC'`;
     }
 
     // 🔎 Search filter
@@ -965,26 +815,31 @@ app.get('/poc/knowledgeBaseUsecases', authenticateToken, async (req, res) => {
     // ▶️ Execute query
     const { rows: usecases } = await db.query(query, queryParams);
 
-    // 📎 Check file availability
-    for (const usecase of usecases) {
-      const fileResult = await db.query(
-        `
+    // 📎 File availability check
+    const updatedUsecases = await Promise.all(
+      usecases.map(async (usecase) => {
+        const fileResult = await db.query(
+          `
           SELECT COUNT(*) AS file_count
           FROM knowledge_materials
           WHERE usecase_id = $1
             AND status = 'active'
-        `,
-        [usecase['Usecase Id']]
-      );
+          `,
+          [usecase['Usecase Id']]
+        );
 
-      usecase.hasFiles = parseInt(fileResult.rows[0].file_count, 10) > 0;
-    }
+        return {
+          ...usecase,
+          hasFiles: parseInt(fileResult.rows[0].file_count, 10) > 0
+        };
+      })
+    );
 
     // ✅ Response
     res.json({
       success: true,
-      data: usecases,
-      total: usecases.length
+      data: updatedUsecases,
+      total: updatedUsecases.length
     });
 
   } catch (error) {
@@ -1698,7 +1553,8 @@ app.get("/poc/permissions/:emp_id", authenticateToken, async (req, res) => {
         admin_access,
         knowledge_base_access,
         knowledge_base_upload_access,
-        sales_report_card_access
+        sales_report_card_access,
+        sc_report_access
       FROM public.user_permissions
       WHERE emp_id = $1;
     `;
@@ -1717,6 +1573,7 @@ app.get("/poc/permissions/:emp_id", authenticateToken, async (req, res) => {
         leave_access: false,
         sales_admin: false,  // Default to false if no record found
         sales_report_card_access: false, // Default to false if no record found
+        sc_report_access: false,
       });
     }
 
@@ -2235,34 +2092,36 @@ app.get("/poc/getUsecases", authenticateToken, async (req, res) => {
       // Show all in-progress usecases
       query = `
         SELECT 
-          poc_prj_id, poc_prj_name, client_name, partner_client_own, sales_person, 
-          description, assigned_to, start_date, excepted_end_date, status, remarks, 
-          created_by, region, sales_account_manager_name, complexity, last_status, 
-          last_status_date, status_change_date, is_billable, poc_type, tag, 
-          spoc_email_address, spoc_designation, department_name
-        FROM public.poc_prj_details 
-        WHERE status = 'In Progress' 
-        ORDER BY poc_prj_name
+          p.poc_prj_id, p.poc_prj_name, p.client_name, p.partner_client_own, p.sales_person, 
+          p.description, p.assigned_to, p.start_date, p.excepted_end_date, p.status, p.remarks, 
+          p.created_by, p.region, p.sales_account_manager_name, p.complexity, p.last_status, 
+          p.last_status_date, p.status_change_date, p.is_billable, p.poc_type, p.tag, 
+          p.spoc_email_address, p.spoc_designation, p.department_name, e.partner_name
+        FROM public.poc_prj_details p
+        LEFT JOIN public.poc_prj_efforts e ON p.poc_prj_id = e.poc_prj_id
+        WHERE p.status = 'In Progress' 
+        ORDER BY p.poc_prj_name
       `;
     } else if (hasStatusAccess) {
       // Show only assigned usecases
       query = `
         SELECT 
-          poc_prj_id, poc_prj_name, client_name, partner_client_own, sales_person, 
-          description, assigned_to, start_date, excepted_end_date, status, remarks, 
-          created_by, region, sales_account_manager_name, complexity, last_status, 
-          last_status_date, status_change_date, is_billable, poc_type, tag, 
-          spoc_email_address, spoc_designation, department_name
-        FROM public.poc_prj_details 
-        WHERE status = 'In Progress' 
+          p.poc_prj_id, p.poc_prj_name, p.client_name, p.partner_client_own, p.sales_person, 
+          p.description, p.assigned_to, p.start_date, p.excepted_end_date, p.status, p.remarks, 
+          p.created_by, p.region, p.sales_account_manager_name, p.complexity, p.last_status, 
+          p.last_status_date, p.status_change_date, p.is_billable, p.poc_type, p.tag, 
+          p.spoc_email_address, p.spoc_designation, p.department_name, e.partner_name
+        FROM public.poc_prj_details p
+        LEFT JOIN public.poc_prj_efforts e ON p.poc_prj_id = e.poc_prj_id
+        WHERE p.status = 'In Progress' 
           AND (
-            assigned_to ILIKE $1 
-            OR assigned_to ILIKE $2
-            OR assigned_to ILIKE $3
-            OR assigned_to ILIKE $4
-            OR assigned_to = $5
+            p.assigned_to ILIKE $1 
+            OR p.assigned_to ILIKE $2
+            OR p.assigned_to ILIKE $3
+            OR p.assigned_to ILIKE $4
+            OR p.assigned_to = $5
           )
-        ORDER BY poc_prj_name
+        ORDER BY p.poc_prj_name
       `;
 
       // Prepare search patterns for comma-separated assigned_to field
@@ -2400,7 +2259,7 @@ app.get("/poc/getReports", authenticateToken, async (req, res) => {
         e.total_efforts as "totalEfforts",
         e.variance_days as "varianceDays",
         e.partner_name as "partnerName",
-        COALESCE(e.total_efforts, 0) as "totalWorkedHours"
+        e.total_hours_spent as "totalWorkedHours"
         
       FROM poc_prj_details p
       LEFT JOIN poc_prj_efforts e ON p.poc_prj_id::text = e.poc_prj_id::text
@@ -2414,6 +2273,9 @@ app.get("/poc/getReports", authenticateToken, async (req, res) => {
     res.status(500).json({ message: "Internal server error" });
   }
 });
+
+
+
 
 
 app.post("/poc/api/auth/login", async (req, res) => {
@@ -3088,126 +2950,58 @@ const sendPOCNotificationEmail = async (pocData) => {
 <!DOCTYPE html>
 <html>
 <head>
-    <style>
-        body {
-            font-family: 'Calibri', Arial, sans-serif;
-            line-height: 1.6;
-            color: #000000;
-            margin: 0;
-            padding: 20px;
-            background-color: #ffffff;
-        }
-        .container {
-            max-width: 700px;
-            margin: 0 auto;
-            background: #ffffff;
-        }
-        .content {
-            padding: 20px;
-        }
-        .greeting {
-            font-size: 14px;
-            color: #000000;
-            margin-bottom: 15px;
-            font-weight: normal;
-        }
-        .info-text {
-            font-size: 14px;
-            color: #000000;
-            margin-bottom: 20px;
-            line-height: 1.5;
-        }
-        .poc-table {
-            width: 100%;
-            border: 1px solid #000000;
-            border-collapse: collapse;
-            font-size: 14px;
-            font-family: Calibri, Arial, sans-serif;
-        }
-        .poc-table th {
-            background-color: rgba(57, 25, 201, 0.822);
-            color: #ffffff;
-            padding: 8px 12px;
-            text-align: left;
-            font-weight: bold;
-            border: 1px solid #000000;
-            font-size: 14px;
-        }
-        .poc-table td {
-            padding: 8px 12px;
-            border: 1px solid #000000;
-            background-color: #ffffff;
-            font-size: 14px;
-        }
-        .poc-table tr:nth-child(even) td {
-            background-color: #ffffff;
-        }
-        .field-column {
-            font-weight: bold;
-            color: #000000;
-            width: 35%;
-        }
-        .value-column {
-            color: #000000;
-            width: 65%;
-        }
-        .poc-id-value {
-            color: #000000;
-            font-weight: bold;
-        }
-        .footer {
-            margin-top: 20px;
-            padding: 15px 0;
-            border-top: 1px solid #cccccc;
-        }
-    </style>
+    <meta charset="utf-8">
 </head>
-<body>
-    <div class="container">
-        <div class="content">
-            <div class="greeting">Hi Team,</div>
+<body style="font-family: Calibri, Arial, sans-serif; line-height: 1.6; color: #000000; margin: 0; padding: 20px; background-color: #ffffff;">
+    <div style="max-width: 700px; margin: 0 auto; background-color: #ffffff;">
+        <div style="padding: 20px;">
+            <div style="font-size: 14px; color: #000000; margin-bottom: 15px;">Hi Team,</div>
             
-            <div class="info-text">
+            <div style="font-size: 14px; color: #000000; margin-bottom: 20px; line-height: 1.5;">
                 Given POC ID already exists, so BOT has created new POC ID as below:
             </div>
             
-            <table class="poc-table" cellspacing="0" cellpadding="5">
-                <tr>
-                    <th>Field</th>
-                    <th>Value</th>
-                </tr>
-                <tr>
-                    <td class="field-column">POC ID</td>
-                    <td class="value-column poc-id-value">${pocData.pocPrjId}</td>
-                </tr>
-                <tr>
-                    <td class="field-column">POC Name</td>
-                    <td class="value-column">${pocData.pocName}</td>
-                </tr>
-                <tr>
-                    <td class="field-column">Name of Partner/Client/Internal</td>
-                    <td class="value-column">${clientPartnerDisplay}</td>
-                </tr>
-                <tr>
-                    <td class="field-column">Assigned To</td>
-                    <td class="value-column">${pocData.assignedTo}</td>
-                </tr>
-                <tr>
-                    <td class="field-column">Salesperson</td>
-                    <td class="value-column">${pocData.salesPerson}</td>
-                </tr>
+            <table cellspacing="0" cellpadding="8" border="1" style="width: 100%; border-collapse: collapse; border: 1px solid #000000; font-family: Calibri, Arial, sans-serif; font-size: 14px;">
+                <thead>
+                    <tr>
+                        <th bgcolor="#3919c9" style="background-color: #3919c9; color: #ffffff; padding: 8px 12px; text-align: left; border: 1px solid #000000;">Field</th>
+                        <th bgcolor="#3919c9" style="background-color: #3919c9; color: #ffffff; padding: 8px 12px; text-align: left; border: 1px solid #000000;">Value</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td style="padding: 8px 12px; border: 1px solid #000000; font-weight: bold; width: 35%;">POC ID</td>
+                        <td style="padding: 8px 12px; border: 1px solid #000000; font-weight: bold; width: 65%;">${pocData.pocPrjId}</td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 8px 12px; border: 1px solid #000000; font-weight: bold; width: 35%;">POC Name</td>
+                        <td style="padding: 8px 12px; border: 1px solid #000000; width: 65%;">${pocData.pocName}</td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 8px 12px; border: 1px solid #000000; font-weight: bold; width: 35%;">Name of Partner/Client/Internal</td>
+                        <td style="padding: 8px 12px; border: 1px solid #000000; width: 65%;">${clientPartnerDisplay}</td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 8px 12px; border: 1px solid #000000; font-weight: bold; width: 35%;">Assigned To</td>
+                        <td style="padding: 8px 12px; border: 1px solid #000000; width: 65%;">${pocData.assignedTo}</td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 8px 12px; border: 1px solid #000000; font-weight: bold; width: 35%;">Salesperson</td>
+                        <td style="padding: 8px 13px; border: 1px solid #000000; width: 65%;">${pocData.salesPerson}</td>
+                    </tr>
+                </tbody>
             </table>
         </div>
         
-        <div class="footer">
+        <div style="margin-top: 20px; padding: 15px 0; border-top: 1px solid #cccccc; padding-left: 20px;">
             <font face='Cambria' color='#003b94'>
-            <br><p>Thanks & Regards,</font></br>
+                <p>Thanks & Regards,</p>
+            </font>
             <font face='Cambria' color='#ff9100'><b>POC BOT</b></font><br>
-            <i><font face="Calibri" size="3" color="#003b94">
-            ------------------------------------------------------------------<br>
-            This is BOT generated email, please do not reply
-            </font></i>
-            <br><br>
+            <div style="margin-top: 10px; color: #003b94; font-family: Calibri, sans-serif; font-size: 13px; font-style: italic;">
+                ------------------------------------------------------------------<br>
+                This is BOT generated email, please do not reply
+            </div>
         </div>
     </div>
 </body>
@@ -3519,60 +3313,108 @@ async function sendPocEmail(pocDetails) {
 
     // HTML body with professional CSS
     const body = `
-      <html>
-        <head>
-          <style>
-            body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f4f6f9; padding: 20px; }
-            h2 { color: #333; }
-            table { width: 80%; margin: 20px auto; border-collapse: collapse;
-                    background: #fff; border-radius: 10px; overflow: hidden;
-                    box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
-            th, td { padding: 12px 18px; text-align: left; border-bottom: 1px solid #eee; }
-            th { width: 30%; background: #f1f5ff; color: #333; text-transform: uppercase;
-                 letter-spacing: 0.05em; font-weight: 600; }
-            td { width: 70%; color: #444; }
-            tr:nth-child(even) { background: #fafafa; }
-            tr:hover { background: #f1f5ff; }
-            .success { margin: 20px auto; width: 80%; font-size: 16px; font-weight: 600; color: green; }
-          </style>
-        </head>
-        <body>
-         <p>Hi Team,</p> 
-         <p>Please find the below table report for the newly initiated usecase by the PCS ROW Team.</p>
-         <br /><br />
-          <h2>📢 A new POC has been created</h2>
-          <table>
-            <tr><th>ID</th><td>${pocDetails.id}</td></tr>
-            <tr><th>Sales Person</th><td>${safe(pocDetails.sp_name)}</td></tr>
-            <tr><th>Region</th><td>${safe(pocDetails.region)}</td></tr>
-            <tr><th>End Customer Type</th><td>${safe(pocDetails.end_customer_type)}</td></tr>
-            <tr><th>Process Type</th><td>${safe(pocDetails.process_type)}</td></tr>
-            <tr><th>Customer Company</th><td>${safe(pocDetails.company_name)}</td></tr>
-            <tr><th>Customer SPOC</th><td>${safe(pocDetails.spoc)}</td></tr>
-            <tr><th>Customer SPOC Email</th><td>${safe(pocDetails.spoc_email)}</td></tr>
-            <tr><th>Customer Designation</th><td>${safe(pocDetails.designation)}</td></tr>
-            <tr><th>Customer Mobile</th><td>${safe(pocDetails.mobile_number)}</td></tr>
-            <tr><th>Use Case</th><td>${safe(pocDetails.usecase)}</td></tr>
-            <tr><th>Brief</th><td>${safe(pocDetails.brief)}</td></tr>
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+</head>
+<body style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f6f9; padding: 20px; margin: 0;">
+    <div style="max-width: 650px; margin: 0 auto; background-color: #ffffff; padding: 30px; border-radius: 8px; border: 1px solid #dddddd;">
+        <p style="color: #333333; font-size: 14px;">Hi Team,</p> 
+        <p style="color: #333333; font-size: 14px;">Please find the below table report for the newly initiated usecase by the PCS ROW Team.</p>
+        
+        <h2 style="color: #333333; font-size: 18px; margin-top: 25px; margin-bottom: 15px;">📢 A new POC has been created</h2>
+        
+        <table cellspacing="0" cellpadding="12" border="0" style="width: 100%; border-collapse: collapse; background-color: #ffffff; border: 1px solid #eeeeee;">
+            <tr>
+                <th bgcolor="#f1f5ff" style="width: 35%; background-color: #f1f5ff; color: #333333; text-align: left; border-bottom: 1px solid #eeeeee; font-weight: 600; text-transform: uppercase; font-size: 12px; letter-spacing: 0.5px;">ID</th>
+                <td style="width: 65%; color: #444444; border-bottom: 1px solid #eeeeee; font-size: 14px;">${pocDetails.id}</td>
+            </tr>
+            <tr>
+                <th bgcolor="#f1f5ff" style="width: 35%; background-color: #f1f5ff; color: #333333; text-align: left; border-bottom: 1px solid #eeeeee; font-weight: 600; text-transform: uppercase; font-size: 12px; letter-spacing: 0.5px;">Sales Person</th>
+                <td style="width: 65%; color: #444444; border-bottom: 1px solid #eeeeee; font-size: 14px;">${safe(pocDetails.sp_name)}</td>
+            </tr>
+            <tr>
+                <th bgcolor="#f1f5ff" style="width: 35%; background-color: #f1f5ff; color: #333333; text-align: left; border-bottom: 1px solid #eeeeee; font-weight: 600; text-transform: uppercase; font-size: 12px; letter-spacing: 0.5px;">Region</th>
+                <td style="width: 65%; color: #444444; border-bottom: 1px solid #eeeeee; font-size: 14px;">${safe(pocDetails.region)}</td>
+            </tr>
+            <tr>
+                <th bgcolor="#f1f5ff" style="width: 35%; background-color: #f1f5ff; color: #333333; text-align: left; border-bottom: 1px solid #eeeeee; font-weight: 600; text-transform: uppercase; font-size: 12px; letter-spacing: 0.5px;">End Customer Type</th>
+                <td style="width: 65%; color: #444444; border-bottom: 1px solid #eeeeee; font-size: 14px;">${safe(pocDetails.end_customer_type)}</td>
+            </tr>
+            <tr>
+                <th bgcolor="#f1f5ff" style="width: 35%; background-color: #f1f5ff; color: #333333; text-align: left; border-bottom: 1px solid #eeeeee; font-weight: 600; text-transform: uppercase; font-size: 12px; letter-spacing: 0.5px;">Process Type</th>
+                <td style="width: 65%; color: #444444; border-bottom: 1px solid #eeeeee; font-size: 14px;">${safe(pocDetails.process_type)}</td>
+            </tr>
+            <tr>
+                <th bgcolor="#f1f5ff" style="width: 35%; background-color: #f1f5ff; color: #333333; text-align: left; border-bottom: 1px solid #eeeeee; font-weight: 600; text-transform: uppercase; font-size: 12px; letter-spacing: 0.5px;">Customer Company</th>
+                <td style="width: 65%; color: #444444; border-bottom: 1px solid #eeeeee; font-size: 14px;">${safe(pocDetails.company_name)}</td>
+            </tr>
+            <tr>
+                <th bgcolor="#f1f5ff" style="width: 35%; background-color: #f1f5ff; color: #333333; text-align: left; border-bottom: 1px solid #eeeeee; font-weight: 600; text-transform: uppercase; font-size: 12px; letter-spacing: 0.5px;">Customer SPOC</th>
+                <td style="width: 65%; color: #444444; border-bottom: 1px solid #eeeeee; font-size: 14px;">${safe(pocDetails.spoc)}</td>
+            </tr>
+            <tr>
+                <th bgcolor="#f1f5ff" style="width: 35%; background-color: #f1f5ff; color: #333333; text-align: left; border-bottom: 1px solid #eeeeee; font-weight: 600; text-transform: uppercase; font-size: 12px; letter-spacing: 0.5px;">Customer SPOC Email</th>
+                <td style="width: 65%; color: #444444; border-bottom: 1px solid #eeeeee; font-size: 14px;">${safe(pocDetails.spoc_email)}</td>
+            </tr>
+            <tr>
+                <th bgcolor="#f1f5ff" style="width: 35%; background-color: #f1f5ff; color: #333333; text-align: left; border-bottom: 1px solid #eeeeee; font-weight: 600; text-transform: uppercase; font-size: 12px; letter-spacing: 0.5px;">Customer Designation</th>
+                <td style="width: 65%; color: #444444; border-bottom: 1px solid #eeeeee; font-size: 14px;">${safe(pocDetails.designation)}</td>
+            </tr>
+            <tr>
+                <th bgcolor="#f1f5ff" style="width: 35%; background-color: #f1f5ff; color: #333333; text-align: left; border-bottom: 1px solid #eeeeee; font-weight: 600; text-transform: uppercase; font-size: 12px; letter-spacing: 0.5px;">Customer Mobile</th>
+                <td style="width: 65%; color: #444444; border-bottom: 1px solid #eeeeee; font-size: 14px;">${safe(pocDetails.mobile_number)}</td>
+            </tr>
+            <tr>
+                <th bgcolor="#f1f5ff" style="width: 35%; background-color: #f1f5ff; color: #333333; text-align: left; border-bottom: 1px solid #eeeeee; font-weight: 600; text-transform: uppercase; font-size: 12px; letter-spacing: 0.5px;">Use Case</th>
+                <td style="width: 65%; color: #444444; border-bottom: 1px solid #eeeeee; font-size: 14px;">${safe(pocDetails.usecase)}</td>
+            </tr>
+            <tr>
+                <th bgcolor="#f1f5ff" style="width: 35%; background-color: #f1f5ff; color: #333333; text-align: left; border-bottom: 1px solid #eeeeee; font-weight: 600; text-transform: uppercase; font-size: 12px; letter-spacing: 0.5px;">Brief</th>
+                <td style="width: 65%; color: #444444; border-bottom: 1px solid #eeeeee; font-size: 14px;">${safe(pocDetails.brief)}</td>
+            </tr>
             ${pocDetails.end_customer_type === 'Partner' ? `
-            <tr><th>Partner Company</th><td>${safe(pocDetails.partner_company_name)}</td></tr>
-            <tr><th>Partner SPOC</th><td>${safe(pocDetails.partner_spoc)}</td></tr>
-            <tr><th>Partner SPOC Email</th><td>${safe(pocDetails.partner_spoc_email)}</td></tr>
-            <tr><th>Partner Designation</th><td>${safe(pocDetails.partner_designation)}</td></tr>
-            <tr><th>Partner Mobile</th><td>${safe(pocDetails.partner_mobile_number)}</td></tr>
+            <tr>
+                <th bgcolor="#f1f5ff" style="width: 35%; background-color: #f1f5ff; color: #333333; text-align: left; border-bottom: 1px solid #eeeeee; font-weight: 600; text-transform: uppercase; font-size: 12px; letter-spacing: 0.5px;">Partner Company</th>
+                <td style="width: 65%; color: #444444; border-bottom: 1px solid #eeeeee; font-size: 14px;">${safe(pocDetails.partner_company_name)}</td>
+            </tr>
+            <tr>
+                <th bgcolor="#f1f5ff" style="width: 35%; background-color: #f1f5ff; color: #333333; text-align: left; border-bottom: 1px solid #eeeeee; font-weight: 600; text-transform: uppercase; font-size: 12px; letter-spacing: 0.5px;">Partner SPOC</th>
+                <td style="width: 65%; color: #444444; border-bottom: 1px solid #eeeeee; font-size: 14px;">${safe(pocDetails.partner_spoc)}</td>
+            </tr>
+            <tr>
+                <th bgcolor="#f1f5ff" style="width: 35%; background-color: #f1f5ff; color: #333333; text-align: left; border-bottom: 1px solid #eeeeee; font-weight: 600; text-transform: uppercase; font-size: 12px; letter-spacing: 0.5px;">Partner SPOC Email</th>
+                <td style="width: 65%; color: #444444; border-bottom: 1px solid #eeeeee; font-size: 14px;">${safe(pocDetails.partner_spoc_email)}</td>
+            </tr>
+            <tr>
+                <th bgcolor="#f1f5ff" style="width: 35%; background-color: #f1f5ff; color: #333333; text-align: left; border-bottom: 1px solid #eeeeee; font-weight: 600; text-transform: uppercase; font-size: 12px; letter-spacing: 0.5px;">Partner Designation</th>
+                <td style="width: 65%; color: #444444; border-bottom: 1px solid #eeeeee; font-size: 14px;">${safe(pocDetails.partner_designation)}</td>
+            </tr>
+            <tr>
+                <th bgcolor="#f1f5ff" style="width: 35%; background-color: #f1f5ff; color: #333333; text-align: left; border-bottom: 1px solid #eeeeee; font-weight: 600; text-transform: uppercase; font-size: 12px; letter-spacing: 0.5px;">Partner Mobile</th>
+                <td style="width: 65%; color: #444444; border-bottom: 1px solid #eeeeee; font-size: 14px;">${safe(pocDetails.partner_mobile_number)}</td>
+            </tr>
             ` : ''}
-          </table>
-          <p class='success'>✅ Created successfully! 🚀</p>
-          <br /><br />
-         <font face='Cambria', color='#003b94'></p><br><p>Thanks & Regards,</font>
-         </br><font face='Cambria', color='#ff9100'>PCS ROW Team BOT</b></font>
-         <br><i>
-         <font face=\"Calibri\", size=3, color=\"#003b94\" >
-           ------------------------------------------------------------------<br>
-         This is BOT generated email, please do not reply.
-         </font></i><br><br></font>
-          </body>
-      </html>
+        </table>
+        
+        <p style="margin-top: 25px; font-size: 16px; font-weight: 600; color: #28a745;">✅ Created successfully! 🚀</p>
+        
+        <div style="margin-top: 30px; border-top: 1px solid #eeeeee; padding-top: 20px;">
+            <font face='Cambria' color='#003b94'>
+                <p style="margin: 0;">Thanks & Regards,</p>
+            </font>
+            <font face='Cambria' color='#ff9100'>
+                <b style="font-size: 16px;">PCS ROW Team BOT</b>
+            </font>
+            <div style="margin-top: 10px; color: #003b94; font-family: Calibri, sans-serif; font-size: 13px; font-style: italic;">
+                ------------------------------------------------------------------<br>
+                This is BOT generated email, please do not reply.
+            </div>
+        </div>
+    </div>
+</body>
+</html>
     `;
 
     const mailOptions = {
@@ -3721,6 +3563,31 @@ app.get('/poc/getEmployees', authenticateToken, async (req, res) => {
     console.error('Error fetching employees:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
+});
+
+// Alias for getEmployees as getAllAssignTo to support legacy frontend calls
+app.get('/poc/getAllAssignTo', authenticateToken, async (req, res) => {
+  try {
+    const query = `
+            SELECT 
+                emp_name as name,
+                email_id as email
+            FROM emp_details 
+            WHERE status='Active' 
+            ORDER BY emp_name
+        `;
+    const result = await pool.query(query);
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error fetching assignTo:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Endpoint to get Created By info
+app.get('/poc/getCreatedBy', authenticateToken, async (req, res) => {
+  const { emp_name } = req.query;
+  res.json([emp_name || req.user.emp_name]);
 });
 
 
@@ -3975,7 +3842,7 @@ POC Bot
       from: `"POC Bot" <${emailConfig.auth.user}>`,
       to: manager_mail_id,
       cc: pcs_row_mail_id, // CC the actual employee email
-      subject: 'Leave Application',
+      subject: `Leave Application - ${leaveDetails.emp_name}`,
       text: emailBody,
       html: `
         <div style="font-family: Arial, sans-serif; line-height: 1.6;">
@@ -4038,12 +3905,12 @@ POC Bot
             </font>
           </i>
         </div>
-      `
+`
     };
 
     // Send email
     const info = await transporter.sendMail(mailOptions);
-    console.log(`Email sent successfully. Message ID: ${info.messageId}`);
+    console.log(`Email sent successfully.Message ID: ${info.messageId} `);
     return true;
 
   } catch (error) {
@@ -4061,7 +3928,7 @@ app.get('/poc/leave/requests', authenticateToken, async (req, res) => {
     // Check if user has all_status_access or status_access permission
     const permissionQuery = `
       SELECT all_status_access, status_access FROM user_permissions WHERE emp_id = $1
-    `;
+  `;
     const permissionResult = await pool.query(permissionQuery, [emp_id]);
 
     let hasAllAccess = false;
@@ -4078,40 +3945,40 @@ app.get('/poc/leave/requests', authenticateToken, async (req, res) => {
     // If user has all_status_access OR status_access, show all leaves
     if (hasAllAccess || hasStatusAccess) {
       query = `
-        SELECT 
-          sr_no as id,
-          emp_id,
-          emp_name,
-          leave_type,
-          from_date,
-          to_date,
-          apply_date,
-          reason,
-          leave_status as status,
-          emp_email,
-          rm_emp_email,
-          half_day,
-          half_day_type
+SELECT
+sr_no as id,
+  emp_id,
+  emp_name,
+  leave_type,
+  from_date,
+  to_date,
+  apply_date,
+  reason,
+  leave_status as status,
+  emp_email,
+  rm_emp_email,
+  half_day,
+  half_day_type
         FROM employee_leave_details 
         ORDER BY sr_no DESC
-      `;
+  `;
     } else {
       // Otherwise, show only their own leaves
       query = `
-        SELECT 
-          sr_no as id,
-          emp_id,
-          emp_name,
-          leave_type,
-          from_date,
-          to_date,
-          apply_date,
-          reason,
-          leave_status as status,
-          emp_email,
-          rm_emp_email,
-          half_day,
-          half_day_type
+SELECT
+sr_no as id,
+  emp_id,
+  emp_name,
+  leave_type,
+  from_date,
+  to_date,
+  apply_date,
+  reason,
+  leave_status as status,
+  emp_email,
+  rm_emp_email,
+  half_day,
+  half_day_type
         FROM employee_leave_details 
         WHERE emp_id = $1 
         ORDER BY sr_no DESC
@@ -4127,15 +3994,15 @@ app.get('/poc/leave/requests', authenticateToken, async (req, res) => {
 
       dateStr = dateStr.trim();
 
-      // Try YYYY-MM-DD format
-      if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
-        const [year, month, day] = dateStr.split('-').map(Number);
+      // Try YYYY-MM-DD format with optional spaces
+      if (/^\d{4}\s*-\s*\d{2}\s*-\s*\d{2}$/.test(dateStr)) {
+        const [year, month, day] = dateStr.split('-').map(part => Number(part.trim()));
         return new Date(year, month - 1, day);
       }
 
-      // Try DD-MM-YYYY format
-      if (/^\d{2}-\d{2}-\d{4}$/.test(dateStr)) {
-        const [day, month, year] = dateStr.split('-').map(Number);
+      // Try DD-MM-YYYY format with optional spaces
+      if (/^\d{2}\s*-\s*\d{2}\s*-\s*\d{4}$/.test(dateStr)) {
+        const [day, month, year] = dateStr.split('-').map(part => Number(part.trim()));
         return new Date(year, month - 1, day);
       }
 
@@ -4227,9 +4094,9 @@ app.put('/poc/leave/edit/:id', authenticateToken, async (req, res) => {
     // 1. Check if leave exists - Get original details for email
     const leaveQuery = `
       SELECT sr_no, emp_id, emp_name, leave_type, from_date, to_date, reason, leave_status,
-             half_day, half_day_type
+  half_day, half_day_type
       FROM employee_leave_details WHERE sr_no = $1
-    `;
+  `;
     const leaveResult = await pool.query(leaveQuery, [id]);
 
     if (leaveResult.rowCount === 0) {
@@ -4247,7 +4114,7 @@ app.put('/poc/leave/edit/:id', authenticateToken, async (req, res) => {
         SELECT all_status_access 
         FROM user_permissions 
         WHERE emp_id = $1
-      `;
+  `;
       const permissionsResult = await pool.query(permissionsQuery, [emp_id]);
 
       // Check if user has all_status_access (assuming it's a boolean column)
@@ -4323,17 +4190,17 @@ app.put('/poc/leave/edit/:id', authenticateToken, async (req, res) => {
 
     // 4. Update leave in employee_leave_details table - ADD half_day and half_day_type
     const updateQuery = `
-      UPDATE employee_leave_details 
-      SET 
-        leave_type = $1,
-        from_date = $2,
-        to_date = $3,
-        reason = $4,
-        half_day = $5,
-        half_day_type = $6
+      UPDATE employee_leave_details
+SET
+leave_type = $1,
+  from_date = $2,
+  to_date = $3,
+  reason = $4,
+  half_day = $5,
+  half_day_type = $6
       WHERE sr_no = $7
-      RETURNING *
-    `;
+RETURNING *
+  `;
 
     const values = [
       leaveType,
@@ -4435,7 +4302,7 @@ const formatDays = (days, halfDay = false, halfDayType = 'first') => {
   // If it's a half day
   if (halfDay && numDays === 0.5) {
     const halfType = halfDayType === 'first' ? 'First Half' : 'Second Half';
-    return `0.5 (Half Day - ${halfType})`;
+    return `0.5(Half Day - ${halfType})`;
   }
 
   // If days is a whole number, show without decimal
@@ -4506,7 +4373,7 @@ const sendLeaveUpdateEmail = async (originalLeave, updatedLeave, updatedByName) 
     const emailBody = `
 Hi Team,
 
-I would like to request an update to my previously applied leave. Please find the revised details below:
+  I would like to request an update to my previously applied leave.Please find the revised details below:
 
 Original Leave Details:
 
@@ -4532,19 +4399,19 @@ Please let me know if any further information is required from my end.
 
 Thank you for your support.
 
-Thanks & Regards,
-POC Bot
+  Thanks & Regards,
+  POC Bot
 
 ---
-Note: This leave was updated by ${updatedByName}
-    `;
+    Note: This leave was updated by ${updatedByName}
+`;
 
     // Email options
     const mailOptions = {
-      from: `"POC Bot" <${emailConfig.auth.user}>`,
+      from: `"POC Bot" < ${emailConfig.auth.user}> `,
       to: manager_mail_id,
       cc: pcs_row_mail_id,
-      subject: 'Request to Update Applied Leave',
+      subject: `Request to Update Applied Leave - ${originalLeave.emp_name || updatedLeave.emp_name || 'N/A'}`,
       text: emailBody,
       html: `
         <div style="font-family: Arial, sans-serif; line-height: 1.6;">
@@ -4893,7 +4760,7 @@ Note: This leave was revoked by User ID: ${revokerId}
       from: `"POC Bot" <${emailConfig.auth.user}>`,
       to: manager_mail_id,
       cc: pcs_row_mail_id,
-      subject: 'Request to Revoke Leave Application',
+      subject: `Request to Revoke Leave Application - ${leaveDetails.emp_name}`,
       text: emailBody,
       html: `
         <div style="font-family: Arial, sans-serif; line-height: 1.6;">
@@ -4974,7 +4841,7 @@ Note: This leave was revoked by User ID: ${revokerId}
 
 
 
-////-----------------------salesss
+////----------------------  SC  ----------------------------------/////
 
 app.get("/poc/sc/all", authenticateToken, async (req, res) => {
   try {
@@ -5028,6 +4895,13 @@ app.get("/poc/sc/all", authenticateToken, async (req, res) => {
         p.approved_by           AS "approvedBy",
         p.total_efforts         AS "totalEfforts",
         p.partner_name          AS "partnerName",
+        p.industry_type         AS "industryType",
+        p.meeting_mode          AS "meetingMode",
+        p.call_type             AS "callType",
+        p.logo_win              AS "logoWin",
+        p.hs_link               AS "hsLink",
+        p.rfp_date              AS "rfpDate",
+        p.client_new_existing   AS "clientNewExisting",
 
         COALESCE((
           SELECT SUM(
@@ -5063,9 +4937,6 @@ app.get("/poc/sc/all", authenticateToken, async (req, res) => {
     res.status(500).json({ message: "Internal server error" });
   }
 });
-
-
-
 
 async function generateNextsales(prefix) {
   try {
@@ -5149,7 +5020,14 @@ app.post("/poc/sc/savepocprjid", authenticateToken, async (req, res) => {
       estimatedEfforts,
       approvedBy,
       totalEfforts,
-      partnerName
+      partnerName,
+      industryType,
+      meetingMode,
+      callType,
+      logoWin,
+      hsLink,
+      rfpDate,
+      clientNewExisting
     } = req.body;
 
     console.log("Incoming payload:", req.body);
@@ -5203,6 +5081,13 @@ app.post("/poc/sc/savepocprjid", authenticateToken, async (req, res) => {
         approved_by,
         total_efforts,
         partner_name,
+        industry_type,
+        meeting_mode,
+        call_type,
+        logo_win,
+        hs_link,
+        rfp_date,
+        client_new_existing,
         created_at,
         updated_at
       )
@@ -5211,7 +5096,7 @@ app.post("/poc/sc/savepocprjid", authenticateToken, async (req, res) => {
         $7,$8,$9,$10,
         $11,$12,$13,$14,
         $15,$16,$17,$18,
-        $19,$20,$21,$22,
+        $19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,
         NOW(), NOW()
       )
       RETURNING *;
@@ -5239,7 +5124,14 @@ app.post("/poc/sc/savepocprjid", authenticateToken, async (req, res) => {
       estimatedEfforts || null, // $19
       approvedBy || null,       // $20
       totalEfforts || null,     // $21
-      partner_name            // $22
+      partner_name,             // $22
+      industryType || null,     // $23
+      meetingMode || null,      // $24
+      callType || null,         // $25
+      logoWin || null,          // $26
+      hsLink || null,           // $27
+      rfpDate || null,          // $28
+      clientNewExisting || null // $29
     ];
 
     const result = await client.query(insertQuery, values);
@@ -5479,7 +5371,14 @@ app.put("/poc/sc/update/:id", authenticateToken, async (req, res) => {
       estimatedEfforts,
       approvedBy,
       totalEfforts,
-      partnerName
+      partnerName,
+      industryType,
+      meetingMode,
+      callType,
+      logoWin,
+      hsLink,
+      rfpDate,
+      clientNewExisting
     } = req.body;
 
     // 🔹 Normalize billable (boolean or string)
@@ -5509,8 +5408,15 @@ app.put("/poc/sc/update/:id", authenticateToken, async (req, res) => {
         approved_by         = $19,
         total_efforts       = $20,
         partner_name        = $21,
+        industry_type       = $22,
+        meeting_mode        = $23,
+        call_type           = $24,
+        logo_win            = $25,
+        hs_link             = $26,
+        rfp_date            = $27,
+        client_new_existing = $28,
         updated_at          = NOW()
-      WHERE poc_prj_id = $22
+      WHERE poc_prj_id = $29
       RETURNING *
     `;
 
@@ -5536,6 +5442,13 @@ app.put("/poc/sc/update/:id", authenticateToken, async (req, res) => {
       approvedBy || null,
       totalEfforts || null,
       partnerName || null,
+      industryType || null,
+      meetingMode || null,
+      callType || null,
+      logoWin || null,
+      hsLink || null,
+      rfpDate || null,
+      clientNewExisting || null,
       id
     ];
 
@@ -5908,6 +5821,24 @@ app.get("/poc/sc/getStatusByDate", authenticateToken, async (req, res) => {
   }
 });
 
+app.get("/poc/sc/getSCReports", authenticateToken, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT poc_prj_id, poc_prj_name, client_name, partner_client_own, sales_person, 
+      region, status, start_date, excepted_end_date, actual_start_date, actual_end_date, 
+      poc_type, description, spoc_email_address, spoc_designation, tag, assigned_to, 
+      created_by, remarks, estimated_efforts, total_efforts, partner_name, created_at, 
+      updated_at, industry_type, meeting_mode, call_type, logo_win, hs_link, rfp_date, 
+      client_new_existing
+	  FROM public.poc_prj_sales_details;
+    `);
+
+    res.json(result.rows);
+  } catch (err) {
+    console.error("Error fetching sales reports:", err);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
 
 
 
@@ -6017,9 +5948,10 @@ app.post('/poc/admin/createUser', authenticateToken, async (req, res) => {
         status_status_access,
         leave_access,
         all_sales_access,
-        admin_access
+        admin_access,
+        sc_report_access
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
       RETURNING emp_id
     `;
 
@@ -6036,7 +5968,8 @@ app.post('/poc/admin/createUser', authenticateToken, async (req, res) => {
       false,                     // $10 status_status_access
       false,                     // $11 leave_access
       false,                     // $12 all_sales_access
-      false                      // $13 admin_access
+      false,                     // $13 admin_access
+      false                      // $14 sc_report_access
     ];
 
     await client.query(insertPermissionsQuery, permissionValues);
@@ -6163,16 +6096,17 @@ app.put('/poc/admin/updateUser', authenticateToken, async (req, res) => {
         status_status_access,
         leave_access,
         all_sales_access,
-        admin_access
+        admin_access,
+        sc_report_access
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
       ON CONFLICT (emp_id) DO NOTHING
       RETURNING emp_id
     `;
 
     const permissionValues = [
       emp_id,
-      false, false, false, false, false,
+      false, false, false, false, false, false, false,
       false, false, false, false, false, false, false
     ];
 
@@ -6268,6 +6202,7 @@ app.get('/poc/admin/getUserPermissions/:empId', authenticateToken, async (req, r
         knowledge_base_access: false,
         knowledge_base_upload_access: false,
         sales_report_card_access: false,
+        sc_report_access: false,
       });
     }
 
@@ -6286,6 +6221,7 @@ app.get('/poc/admin/getUserPermissions/:empId', authenticateToken, async (req, r
       knowledge_base_access: permissions.knowledge_base_access || false,
       knowledge_base_upload_access: permissions.knowledge_base_upload_access || false,
       sales_report_card_access: permissions.sales_report_card_access || false,
+      sc_report_access: permissions.sc_report_access || false,
     });
 
   } catch (error) {
@@ -6311,6 +6247,7 @@ app.post('/poc/admin/updateUserPermissions', authenticateToken, async (req, res)
       knowledge_base_access,
       knowledge_base_upload_access,
       sales_report_card_access,
+      sc_report_access,
     } = req.body;
 
     // Check if permission record exists for this user
@@ -6326,8 +6263,8 @@ app.post('/poc/admin/updateUserPermissions', authenticateToken, async (req, res)
                 (emp_id, status_access, report_access, usecase_creation_access, 
                  all_status_access, sales_access, sales_admin, status_status_access, 
                  sales_dashboard_access, all_sales_access, knowledge_base_access, 
-                 knowledge_base_upload_access, sales_report_card_access)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+                 knowledge_base_upload_access, sales_report_card_access, sc_report_access)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
         [
           emp_id,
           status_access,
@@ -6342,6 +6279,7 @@ app.post('/poc/admin/updateUserPermissions', authenticateToken, async (req, res)
           knowledge_base_access,
           knowledge_base_upload_access,
           sales_report_card_access,
+          sc_report_access,
         ]
       );
     } else {
@@ -6360,6 +6298,7 @@ app.post('/poc/admin/updateUserPermissions', authenticateToken, async (req, res)
                     knowledge_base_access = $11,
                     knowledge_base_upload_access = $12,
                     sales_report_card_access = $13,
+                    sc_report_access = $14,
                     updated_at = CURRENT_TIMESTAMP
                 WHERE emp_id = $1`,
         [
@@ -6376,6 +6315,7 @@ app.post('/poc/admin/updateUserPermissions', authenticateToken, async (req, res)
           knowledge_base_access,
           knowledge_base_upload_access,
           sales_report_card_access,
+          sc_report_access,
         ]
       );
     }
