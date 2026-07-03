@@ -45,7 +45,7 @@ const pool = new Pool({
   host: process.env.DB_HOST || "localhost",
   // database: process.env.DB_NAME || "statusbot_poc",
   // database: process.env.DB_NAME || "statusbot_poc_18_03",
-  database: "statusbot_poc_27_04",
+  database: "statusbot_poc_27_05",
   // database: process.env.DB_NAME || "poc_bot",
   // password: process.env.DB_PASSWORD || "root",
   password: process.env.DB_PASSWORD || "nitin258",
@@ -64,7 +64,7 @@ const emailConfig = {
   requireTLS: true, // Important for port 587
   auth: {
     user: process.env.SMTP_USER || 'alerts@automationedgerpa.com',
-    pass: process.env.SMTP_PASS || 'zzarrvgjnvowydkf'
+    pass: process.env.SMTP_PASS || 'tbuwtwnnmjoyyznx'
   },
   connectionTimeout: 15000,
   greetingTimeout: 15000,
@@ -2506,18 +2506,20 @@ app.get("/poc/all", authenticateToken, async (req, res) => {
         p.region,
         p.is_billable as "isBillable",
         p.status,
-        p.start_date as "startDate",
-        p.excepted_end_date as "endDate",
+        p.start_date::text as "startDate",
+        p.excepted_end_date::text as "endDate",
         p.poc_type as "pocType",
         p.description,
+        p.department_name as "department",
+        p.converted_date::text as "convertedDate",
         p.spoc_email_address as "spocEmail",
         p.spoc_designation as "spocDesignation",
         p.tag as "tags",
         p.assigned_to as "assignedTo",
         p.created_by as "createdBy",
         p.remarks as "remark",
-        e.actual_start_date as "actualStartDate",
-        e.actual_end_date as "actualEndDate",
+        e.actual_start_date::text as "actualStartDate",
+        e.actual_end_date::text as "actualEndDate",
         e.estimated_efforts as "estimatedEfforts",
         e.approved_by as "approvedBy",
         e.total_efforts as "totalEfforts",
@@ -2617,7 +2619,8 @@ app.put("/poc/update/:id", authenticateToken, async (req, res) => {
     const { id } = req.params;
     let {
       pocName, entityName, entityType, salesPerson, region, isBillable,
-      status, startDate, endDate, pocType, description, spocEmail, spocDesignation,
+      status, startDate, endDate, pocType, description, spocEmail, spocDesignation, department,
+      convertedDate,
       tags, assignedTo, remark, actualStartDate, actualEndDate,
       estimatedEfforts, approvedBy, totalEfforts, varianceDays, partnerName
     } = req.body;
@@ -2645,16 +2648,18 @@ app.put("/poc/update/:id", authenticateToken, async (req, res) => {
         description = $11,
         spoc_email_address = $12,
         spoc_designation = $13,
-        tag = $14,
-        assigned_to = $15,
-        remarks = $16
-      WHERE poc_prj_id::text = $17
+        department_name = $14,
+        converted_date = $15,
+        tag = $16,
+        assigned_to = $17,
+        remarks = $18
+      WHERE poc_prj_id::text = $19
       RETURNING *
     `;
 
     const pocDetailsValues = [
       pocName, entityName, entityType, salesPerson, region, billableValue, // ✅ Yes/No saved
-      status, startDate, endDate, pocType, description, spocEmail, spocDesignation,
+      status, startDate, endDate, pocType, description, spocEmail, spocDesignation, department, convertedDate,
       tags, assignedTo, remark, id
     ];
 
@@ -2986,6 +2991,10 @@ const sendPOCNotificationEmail = async (pocData) => {
                         <td style="padding: 8px 12px; border: 1px solid #000000; width: 65%;">${pocData.assignedTo}</td>
                     </tr>
                     <tr>
+                        <td style="padding: 8px 12px; border: 1px solid #000000; font-weight: bold; width: 35%;">Department</td>
+                        <td style="padding: 8px 13px; border: 1px solid #000000; width: 65%;">${pocData.department || 'N/A'}</td>
+                    </tr>
+                    <tr>
                         <td style="padding: 8px 12px; border: 1px solid #000000; font-weight: bold; width: 35%;">Salesperson</td>
                         <td style="padding: 8px 13px; border: 1px solid #000000; width: 65%;">${pocData.salesPerson}</td>
                     </tr>
@@ -3042,6 +3051,8 @@ app.post("/poc/savepocprjid", authenticateToken, async (req, res) => {
       salesPerson,
       spocEmail,
       spocDesignation,
+      department,
+      convertedDate,
       description,
       assignedTo,
       startDate,
@@ -3065,12 +3076,12 @@ app.post("/poc/savepocprjid", authenticateToken, async (req, res) => {
     poc_prj_id, poc_prj_name, client_name, partner_client_own,
     sales_person, description, assigned_to, start_date,
     excepted_end_date, remarks, created_by, region, poc_type,
-    is_billable, tag, spoc_email_address, spoc_designation, department_name,
+    is_billable, tag, spoc_email_address, spoc_designation, department_name, converted_date,
     status  -- Add status column
   )
   VALUES (
     $1,$2,$3,$4,$5,$6,$7,$8,$9,
-    $10,$11,$12,$13,$14,$15,$16,$17,$18,
+    $10,$11,$12,$13,$14,$15,$16,$17,$18,$19,
     'Draft'  -- Set default status as 'Draft'
   )
   RETURNING *;
@@ -3094,7 +3105,8 @@ app.post("/poc/savepocprjid", authenticateToken, async (req, res) => {
       tags,
       spocEmail,
       spocDesignation,
-      "PCS ROW"
+      department,
+      convertedDate
     ]);
 
     // 🔹 Insert into poc_prj_efforts
@@ -3116,7 +3128,8 @@ app.post("/poc/savepocprjid", authenticateToken, async (req, res) => {
         entityName,
         partnerName,
         assignedTo,
-        salesPerson
+        salesPerson,
+        department
       });
     } catch (emailError) {
       console.error("Error sending notification email:", emailError);
@@ -3155,18 +3168,20 @@ app.get("/poc/:id", authenticateToken, async (req, res) => {
           p.region,
           p.is_billable as "isBillable",
           p.status,
-          p.start_date as "startDate",
-          p.excepted_end_date as "endDate",
+          p.start_date::text as "startDate",
+          p.excepted_end_date::text as "endDate",
           p.poc_type as "pocType",
           p.description,
+          p.department_name as "department",
+          p.converted_date::text as "convertedDate",
           p.spoc_email_address as "spocEmail",
           p.spoc_designation as "spocDesignation",
           p.tag as "tags",
           p.assigned_to as "assignedTo",
           p.created_by as "createdBy",
           p.remarks as "remark",
-          e.actual_start_date as "actualStartDate",
-          e.actual_end_date as "actualEndDate",
+          e.actual_start_date::text as "actualStartDate",
+          e.actual_end_date::text as "actualEndDate",
           e.estimated_efforts as "estimatedEfforts",
           e.approved_by as "approvedBy",
           e.total_efforts as "totalEfforts",
@@ -4878,6 +4893,7 @@ app.get("/poc/sc/all", authenticateToken, async (req, res) => {
         p.partner_client_own    AS "entityType",
         p.sales_person          AS "salesPerson",
         p.region,
+        p.country,
         p.status,
         p.start_date            AS "startDate",
         p.excepted_end_date     AS "endDate",
@@ -5027,7 +5043,8 @@ app.post("/poc/sc/savepocprjid", authenticateToken, async (req, res) => {
       logoWin,
       hsLink,
       rfpDate,
-      clientNewExisting
+      clientNewExisting,
+      country
     } = req.body;
 
     console.log("Incoming payload:", req.body);
@@ -5088,6 +5105,7 @@ app.post("/poc/sc/savepocprjid", authenticateToken, async (req, res) => {
         hs_link,
         rfp_date,
         client_new_existing,
+        country,
         created_at,
         updated_at
       )
@@ -5096,7 +5114,7 @@ app.post("/poc/sc/savepocprjid", authenticateToken, async (req, res) => {
         $7,$8,$9,$10,
         $11,$12,$13,$14,
         $15,$16,$17,$18,
-        $19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,
+        $19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,
         NOW(), NOW()
       )
       RETURNING *;
@@ -5131,7 +5149,8 @@ app.post("/poc/sc/savepocprjid", authenticateToken, async (req, res) => {
       logoWin || null,          // $26
       hsLink || null,           // $27
       rfpDate || null,          // $28
-      clientNewExisting || null // $29
+      clientNewExisting || null, // $29
+      country || null           // $30
     ];
 
     const result = await client.query(insertQuery, values);
@@ -5153,6 +5172,20 @@ app.post("/poc/sc/savepocprjid", authenticateToken, async (req, res) => {
 });
 
 
+
+app.get("/poc/sc/master_dropdown/:dropdown_type", authenticateToken, async (req, res) => {
+  try {
+    const { dropdown_type } = req.params;
+    const result = await pool.query(
+      `SELECT value FROM master_dropdown WHERE dropdown_type = $1 AND is_active = TRUE ORDER BY value`,
+      [dropdown_type]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error("Error fetching master dropdown:", err);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
 
 app.get("/poc/sc/getAllAssignTo", authenticateToken, async (req, res) => {
   const { department_name } = req.query;
@@ -5378,7 +5411,8 @@ app.put("/poc/sc/update/:id", authenticateToken, async (req, res) => {
       logoWin,
       hsLink,
       rfpDate,
-      clientNewExisting
+      clientNewExisting,
+      country
     } = req.body;
 
     // 🔹 Normalize billable (boolean or string)
@@ -5415,8 +5449,9 @@ app.put("/poc/sc/update/:id", authenticateToken, async (req, res) => {
         hs_link             = $26,
         rfp_date            = $27,
         client_new_existing = $28,
+        country             = $29,
         updated_at          = NOW()
-      WHERE poc_prj_id = $29
+      WHERE poc_prj_id = $30
       RETURNING *
     `;
 
@@ -5449,6 +5484,7 @@ app.put("/poc/sc/update/:id", authenticateToken, async (req, res) => {
       hsLink || null,
       rfpDate || null,
       clientNewExisting || null,
+      country || null,
       id
     ];
 
@@ -5483,6 +5519,7 @@ app.get("/poc/sc/getUsecases", authenticateToken, async (req, res) => {
         partner_client_own    AS "entityType",
         sales_person          AS "salesPerson",
         region,
+        country,
         status,
         start_date            AS "startDate",
         excepted_end_date     AS "endDate",
