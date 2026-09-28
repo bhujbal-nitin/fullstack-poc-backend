@@ -2730,6 +2730,7 @@ app.get("/poc/getAllAssignTo", authenticateToken, async (req, res) => {
         SELECT sr_no, emp_id, emp_name, email_id
         FROM emp_details
         WHERE status = 'Active'
+        AND department_name = 'PCS ROW'
         AND emp_id NOT IN ('AE0007', 'AE0201', 'AE0751')
         ORDER BY emp_name;
       `);
@@ -3580,25 +3581,6 @@ app.get('/poc/getEmployees', authenticateToken, async (req, res) => {
   }
 });
 
-// Alias for getEmployees as getAllAssignTo to support legacy frontend calls
-app.get('/poc/getAllAssignTo', authenticateToken, async (req, res) => {
-  try {
-    const query = `
-            SELECT 
-                emp_name as name,
-                email_id as email
-            FROM emp_details 
-            WHERE status='Active' 
-            ORDER BY emp_name
-        `;
-    const result = await pool.query(query);
-    res.json(result.rows);
-  } catch (error) {
-    console.error('Error fetching assignTo:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
 // Endpoint to get Created By info
 app.get('/poc/getCreatedBy', authenticateToken, async (req, res) => {
   const { emp_name } = req.query;
@@ -3634,6 +3616,106 @@ const manager_mail_id = process.env.POC_NOTIFICATION_RECIPIENTS ||
 const pcs_row_mail_id = process.env.POC_NOTIFICATION_RECIPIENTS ||
   'nitin.bhujbal@automationedge.com';
 
+// Parses a date string in either DD-MM-YYYY or YYYY-MM-DD format
+const parseLeaveDate = (dateStr) => {
+  if (!dateStr) return null;
+  dateStr = String(dateStr).trim();
+
+  if (/^\d{2}-\d{2}-\d{4}$/.test(dateStr)) {
+    const [day, month, year] = dateStr.split('-').map(Number);
+    return new Date(year, month - 1, day);
+  }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+    const [year, month, day] = dateStr.split('-').map(Number);
+    return new Date(year, month - 1, day);
+  }
+
+  const date = new Date(dateStr);
+  return isNaN(date.getTime()) ? null : date;
+};
+
+// Counts leave days between two dates, excluding weekends (Sat/Sun are never leave days)
+const calculateBusinessDays = (startDateStr, endDateStr, halfDay = false) => {
+  if (halfDay) return 0.5;
+
+  const start = parseLeaveDate(startDateStr);
+  const end = parseLeaveDate(endDateStr);
+  if (!start || !end) return 1;
+
+  const from = start <= end ? start : end;
+  const to = start <= end ? end : start;
+
+  let businessDays = 0;
+  const cursor = new Date(from);
+  while (cursor <= to) {
+    const dayOfWeek = cursor.getDay();
+    if (dayOfWeek !== 0 && dayOfWeek !== 6) businessDays++;
+    cursor.setDate(cursor.getDate() + 1);
+  }
+
+  return businessDays;
+};
+
+const formatLeaveDateForMessage = (date) =>
+  date.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+
+// Checks a candidate leave (startDateStr..endDateStr, optionally half-day) against an
+// employee's existing leave rows and returns the list of conflicting working-day dates.
+// A day is only free for a half-day request if the other half of that same day is free;
+// it is never free for a full-day request if either half (or the whole day) is already taken.
+const findLeaveConflicts = (existingLeaves, startDateStr, endDateStr, halfDay, halfDayType) => {
+  const occupiedByDate = {}; // 'YYYY-MM-DD' -> { full, first, second }
+
+  existingLeaves.forEach((leave) => {
+    const start = parseLeaveDate(leave.from_date);
+    const end = parseLeaveDate(leave.to_date);
+    if (!start || !end) return;
+
+    const from = start <= end ? start : end;
+    const to = start <= end ? end : start;
+    const cursor = new Date(from);
+    while (cursor <= to) {
+      const dayOfWeek = cursor.getDay();
+      if (dayOfWeek !== 0 && dayOfWeek !== 6) {
+        const key = cursor.toISOString().split('T')[0];
+        if (!occupiedByDate[key]) occupiedByDate[key] = {};
+        if (leave.half_day) {
+          occupiedByDate[key][leave.half_day_type === 'second' ? 'second' : 'first'] = true;
+        } else {
+          occupiedByDate[key].full = true;
+        }
+      }
+      cursor.setDate(cursor.getDate() + 1);
+    }
+  });
+
+  const newStart = parseLeaveDate(startDateStr);
+  const newEnd = parseLeaveDate(endDateStr);
+  if (!newStart || !newEnd) return [];
+
+  const from = newStart <= newEnd ? newStart : newEnd;
+  const to = newStart <= newEnd ? newEnd : newStart;
+
+  const conflicts = [];
+  const cursor = new Date(from);
+  while (cursor <= to) {
+    const dayOfWeek = cursor.getDay();
+    if (dayOfWeek !== 0 && dayOfWeek !== 6) {
+      const key = cursor.toISOString().split('T')[0];
+      const occ = occupiedByDate[key];
+      if (occ) {
+        const conflicting = halfDay
+          ? Boolean(occ.full || occ[halfDayType === 'second' ? 'second' : 'first'])
+          : Boolean(occ.full || occ.first || occ.second);
+        if (conflicting) conflicts.push(formatLeaveDateForMessage(new Date(cursor)));
+      }
+    }
+    cursor.setDate(cursor.getDate() + 1);
+  }
+
+  return conflicts;
+};
+
 // 1. Apply for Leave (POST)
 app.post('/poc/leave/apply', authenticateToken, async (req, res) => {
   try {
@@ -3665,6 +3747,24 @@ app.post('/poc/leave/apply', authenticateToken, async (req, res) => {
       return res.status(400).json({
         error: 'Missing required fields',
         received: { leaveType, startDate, endDate, days, reason }
+      });
+    }
+
+    if (halfDay && startDate !== endDate) {
+      return res.status(400).json({
+        error: 'For Half Day leave, Start Date and End Date must be the same day'
+      });
+    }
+
+    // Prevent applying for a day that already has a conflicting leave
+    const existingLeavesResult = await pool.query(
+      'SELECT from_date, to_date, half_day, half_day_type FROM employee_leave_details WHERE emp_id = $1',
+      [emp_id]
+    );
+    const conflicts = findLeaveConflicts(existingLeavesResult.rows, startDate, endDate, halfDay, halfDayType);
+    if (conflicts.length > 0) {
+      return res.status(409).json({
+        error: `You already have leave applied on: ${conflicts.join(', ')}`
       });
     }
 
@@ -3769,7 +3869,7 @@ app.post('/poc/leave/apply', authenticateToken, async (req, res) => {
       leave_type: leaveType,
       start_date: startDate, // Keep original format for email
       end_date: endDate, // Keep original format for email
-      days: parseFloat(days),
+      days: calculateBusinessDays(startDate, endDate, halfDay),
       reason: reason,
       contact_during_leave: contactDuringLeave || null,
       half_day: halfDay,
@@ -4039,27 +4139,9 @@ sr_no as id,
       return `${year}-${month}-${day}`;
     };
 
-    // Calculate days between two dates - UPDATED for half-day
-    const calculateDays = (startDateStr, endDateStr, halfDay = false) => {
-      if (halfDay) return 0.5;
-
-      const startDate = parseDate(startDateStr);
-      const endDate = parseDate(endDateStr);
-
-      if (!startDate || !endDate) return 1;
-
-      const start = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate());
-      const end = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate());
-
-      const diffTime = Math.abs(end - start);
-      const diffDays = Math.floor(diffTime / (1024 * 60 * 60 * 24));
-
-      return diffDays + 1;
-    };
-
     // Transform the data
     const transformedResult = result.rows.map(row => {
-      const days = calculateDays(row.from_date, row.to_date, row.half_day);
+      const days = calculateBusinessDays(row.from_date, row.to_date, row.half_day);
       const formattedStartDate = formatDateToYYYYMMDD(row.from_date);
       const formattedEndDate = formatDateToYYYYMMDD(row.to_date);
 
@@ -4140,6 +4222,24 @@ app.put('/poc/leave/edit/:id', authenticateToken, async (req, res) => {
       }
     }
 
+    if (halfDay && startDate !== endDate) {
+      return res.status(400).json({
+        error: 'For Half Day leave, Start Date and End Date must be the same day'
+      });
+    }
+
+    // Prevent editing into a day that already has a conflicting leave (excluding this leave itself)
+    const existingLeavesResult = await pool.query(
+      'SELECT from_date, to_date, half_day, half_day_type FROM employee_leave_details WHERE emp_id = $1 AND sr_no != $2',
+      [originalLeave.emp_id, id]
+    );
+    const conflicts = findLeaveConflicts(existingLeavesResult.rows, startDate, endDate, halfDay, halfDayType);
+    if (conflicts.length > 0) {
+      return res.status(409).json({
+        error: `You already have leave applied on: ${conflicts.join(', ')}`
+      });
+    }
+
     // Format dates to DD-MM-YYYY (same as apply leave API)
     const formatDateToDDMMYYYY = (dateString) => {
       if (!dateString) return null;
@@ -4178,30 +4278,7 @@ app.put('/poc/leave/edit/:id', authenticateToken, async (req, res) => {
     });
 
     // 3. Calculate days for updated leave
-    const calculateDays = () => {
-      if (halfDay) return 0.5;
-
-      // Parse dates for calculation
-      const parseDate = (dateStr) => {
-        // Handle DD-MM-YYYY format
-        if (dateStr.match(/^\d{2}-\d{2}-\d{4}$/)) {
-          const parts = dateStr.split('-');
-          return new Date(parts[2], parts[1] - 1, parts[0]);
-        }
-        // Handle YYYY-MM-DD format
-        if (dateStr.match(/^\d{4}-\d{2}-\d{2}$/)) {
-          return new Date(dateStr);
-        }
-        return new Date(dateStr);
-      };
-
-      const start = parseDate(formattedStartDate);
-      const end = parseDate(formattedEndDate);
-      const timeDiff = Math.abs(end.getTime() - start.getTime());
-      return Math.ceil(timeDiff / (1000 * 3600 * 24)) + 1;
-    };
-
-    const updatedDays = calculateDays();
+    const updatedDays = calculateBusinessDays(formattedStartDate, formattedEndDate, halfDay);
 
     // 4. Update leave in employee_leave_details table - ADD half_day and half_day_type
     const updateQuery = `
@@ -4261,20 +4338,7 @@ RETURNING *
       from_date: formatForEmail(originalLeave.from_date),
       to_date: formatForEmail(originalLeave.to_date),
       // Calculate days for original leave
-      days: originalLeave.half_day ? 0.5 :
-        (() => {
-          const parseDate = (dateStr) => {
-            if (dateStr.match(/^\d{2}-\d{2}-\d{4}$/)) {
-              const parts = dateStr.split('-');
-              return new Date(parts[2], parts[1] - 1, parts[0]);
-            }
-            return new Date(dateStr);
-          };
-          const start = parseDate(originalLeave.from_date);
-          const end = parseDate(originalLeave.to_date);
-          const timeDiff = Math.abs(end.getTime() - start.getTime());
-          return Math.ceil(timeDiff / (1000 * 3600 * 24)) + 1;
-        })()
+      days: calculateBusinessDays(originalLeave.from_date, originalLeave.to_date, originalLeave.half_day)
     };
 
     const updatedForEmail = {
@@ -4574,33 +4638,7 @@ app.delete('/poc/leave/delete/:id', authenticateToken, async (req, res) => {
     }
 
     // Calculate days based on half_day flag
-    const calculateDays = () => {
-      if (leave.half_day) return 0.5;
-
-      const parseDate = (dateStr) => {
-        if (!dateStr) return new Date();
-
-        // Handle DD-MM-YYYY format
-        if (dateStr.match(/^\d{2}-\d{2}-\d{4}$/)) {
-          const parts = dateStr.split('-');
-          return new Date(parts[2], parts[1] - 1, parts[0]);
-        }
-
-        // Handle YYYY-MM-DD format
-        if (dateStr.match(/^\d{4}-\d{2}-\d{2}$/)) {
-          return new Date(dateStr);
-        }
-
-        return new Date(dateStr);
-      };
-
-      const start = parseDate(leave.from_date);
-      const end = parseDate(leave.to_date);
-      const timeDiff = Math.abs(end.getTime() - start.getTime());
-      return Math.ceil(timeDiff / (1000 * 3600 * 24)) + 1;
-    };
-
-    const days = calculateDays();
+    const days = calculateBusinessDays(leave.from_date, leave.to_date, leave.half_day);
 
     // 3. Log the revoke message before deleting
     console.log('=== LEAVE REVOKE LOG ===');
