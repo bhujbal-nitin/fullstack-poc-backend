@@ -25,12 +25,12 @@ const { Pool } = pkg;
 import employeeReportRoutes from './employeeReportApi.js';
 
 const app = express();
-const PORT = process.env.PORT || 5050;
-const JWT_SECRET = process.env.JWT_SECRET || "supersecretkey";
+const PORT = process.env.PORT;
+const JWT_SECRET = process.env.JWT_SECRET;
 
 // Middleware
 app.use(cors({
-  origin: ["http://localhost:5173", "http://10.41.11.103:5173", "http://localhost:80", "http://localhost", "http://10.41.11.87:5173",],
+  origin: process.env.CORS_ORIGINS.split(',').map(origin => origin.trim()),
   credentials: true
 }));
 app.use(express.json());
@@ -41,16 +41,11 @@ app.use(express.json());
 
 // PostgreSQL connection
 const pool = new Pool({
-  user: process.env.DB_USER || "postgres",
-  host: process.env.DB_HOST || "localhost",
-  // database: process.env.DB_NAME || "statusbot_poc",
-  // database: process.env.DB_NAME || "statusbot_poc_18_03",
-  database: "statusbot_poc_27_05",
-  // database: process.env.DB_NAME || "poc_bot",
-  // password: process.env.DB_PASSWORD || "root",
-  password: process.env.DB_PASSWORD || "nitin258",
-  // port: process.env.DB_PORT || 5433,
-  port: process.env.DB_PORT || 5432,
+  user: process.env.DB_USER,
+  host: process.env.DB_HOST,
+  database: process.env.DB_NAME,
+  password: process.env.DB_PASSWORD,
+  port: process.env.DB_PORT,
 });
 
 // Store database pool in app.locals so routes can access it
@@ -58,13 +53,13 @@ app.locals.db = pool;
 
 // Email configuration for initiated POC notifications
 const emailConfig = {
-  host: process.env.SMTP_HOST || 'smtp.gmail.com',
-  port: parseInt(process.env.SMTP_PORT) || 587,
+  host: process.env.SMTP_HOST,
+  port: parseInt(process.env.SMTP_PORT),
   secure: false, // false for port 587
   requireTLS: true, // Important for port 587
   auth: {
-    user: process.env.SMTP_USER || 'alerts@automationedgerpa.com',
-    pass: process.env.SMTP_PASS || 'tbuwtwnnmjoyyznx'
+    user: process.env.SMTP_USER,
+    pass: process.env.SMTP_PASS
   },
   connectionTimeout: 15000,
   greetingTimeout: 15000,
@@ -78,13 +73,11 @@ const emailConfig = {
 
 // This recipients list is for Initiated POC notifications
 // Recipients from environment variable (comma-separated)
-const POC_RECIPIENTS = process.env.POC_NOTIFICATION_RECIPIENTS ||
-  'devopsbyzielotech@gmail.com,nitin.bhujbal@automationedge.com';
+const POC_RECIPIENTS = process.env.POC_NOTIFICATION_RECIPIENTS;
 
 // This recipients list is for Usecase code creation notifications
 // Recipients from environment variable (comma-separated)
-const USECASE_RECIPIENTS = process.env.USECASE_NOTIFICATION_RECIPIENTS ||
-  'nitin.bhujbal@automationedge.com,suhas.kajawe@automationedge.com';
+const USECASE_RECIPIENTS = process.env.USECASE_NOTIFICATION_RECIPIENTS;
 
 
 // Authentication middleware
@@ -138,7 +131,7 @@ const execPromise = (cmd, options = {}) =>
 
 
 const KB_ROOT = path.resolve(
-  'D:/POC/KnowledgeBase'
+  process.env.KB_ROOT
 );
 
 const KNOWLEDGE_BASE_ROOT = path.join(KB_ROOT, 'uploads');
@@ -232,11 +225,11 @@ async function disableSparseCheckout() {
 
 // ===== Knowledge Base Repo Paths =====
 const KB_REPO_PATH = path.resolve(
-  'D:/POC/KnowledgeBase'
+  process.env.KB_ROOT
 );
 
 // ADD THIS LINE - define your Git repository URL
-const KB_REPO_URL = 'http://10.41.5.6/pocteamgroup/poc_knowledge_base_nitin.git'; // e.g., 'https://github.com/yourusername/KnowledgeBase.git'
+const KB_REPO_URL = process.env.KB_REPO_URL; // e.g., 'https://github.com/yourusername/KnowledgeBase.git'
 
 const KB_UPLOADS_PATH = path.join(KB_REPO_PATH, 'uploads');
 
@@ -344,7 +337,7 @@ app.post('/poc/uploadKnowledgeMaterials', authenticateToken, upload.array('files
       });
 
       await axios.post(
-        'https://financebot.automationedge.com/poc/gitUploadKnowledgeMaterials',
+        `${process.env.FINANCEBOT_URL}/poc/gitUploadKnowledgeMaterials`,
         formData,
         {
           headers: formData.getHeaders()
@@ -452,7 +445,7 @@ app.get('/poc/downloadKnowledgeMaterial/:fileId', authenticateToken, async (req,
 
     // Call Git Machine API
     const response = await axios.get(
-      `https://financebot.automationedge.com/poc/gitDownloadKnowledgeMaterial`,
+      `${process.env.FINANCEBOT_URL}/poc/gitDownloadKnowledgeMaterial`,
       {
         params: {
           usecaseId: usecase_id,
@@ -2279,7 +2272,7 @@ app.get("/poc/getReports", authenticateToken, async (req, res) => {
 
 
 app.post("/poc/api/auth/login", async (req, res) => {
-  console.log("Login attempt with body:", req.body);
+  console.log("Login attempt for username:", req.body?.username);
   try {
     const { username, password } = req.body;
 
@@ -3611,10 +3604,8 @@ app.get('/poc/getCreatedBy', authenticateToken, async (req, res) => {
 // ============================================
 
 // Email recipients
-const manager_mail_id = process.env.POC_NOTIFICATION_RECIPIENTS ||
-  'devopsbyzielotech@gmail.com';
-const pcs_row_mail_id = process.env.POC_NOTIFICATION_RECIPIENTS ||
-  'nitin.bhujbal@automationedge.com';
+const manager_mail_id = process.env.LEAVE_MANAGER_EMAIL;
+const pcs_row_mail_id = process.env.LEAVE_CC_EMAIL;
 
 // Parses a date string in either DD-MM-YYYY or YYYY-MM-DD format
 const parseLeaveDate = (dateStr) => {
