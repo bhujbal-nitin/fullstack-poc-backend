@@ -15,6 +15,7 @@ import { exec } from 'child_process';
 import util from 'util';
 import axios from 'axios';
 import FormData from 'form-data';
+import cookieParser from 'cookie-parser';
 
 
 dotenv.config();
@@ -27,6 +28,15 @@ import employeeReportRoutes from './employeeReportApi.js';
 const app = express();
 const PORT = process.env.PORT;
 const JWT_SECRET = process.env.JWT_SECRET;
+const REFRESH_TOKEN_SECRET = process.env.REFRESH_TOKEN_SECRET;
+const REFRESH_TOKEN_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+const REFRESH_COOKIE_OPTIONS = {
+  httpOnly: true,
+  secure: false, // production currently serves this app over plain HTTP (see CORS_ORIGINS) — must stay false or the browser silently drops the cookie
+  sameSite: "lax",
+  maxAge: REFRESH_TOKEN_MAX_AGE_MS,
+  path: "/poc/api/auth"
+};
 
 // Middleware
 app.use(cors({
@@ -34,6 +44,7 @@ app.use(cors({
   credentials: true
 }));
 app.use(express.json());
+app.use(cookieParser());
 
 
 
@@ -742,14 +753,14 @@ app.get('/poc/knowledgeBaseUsecases', authenticateToken, async (req, res) => {
         COALESCE(NULLIF(TRIM(pe.partner_name), ''), '-') AS "Partner Name",
         pd.poc_prj_name AS "Usecase Name",
         pd.status,
-        pd.start_date,
-        pd.excepted_end_date,
+        pd.start_date::text as "start_date",
+        pd.excepted_end_date::text as "excepted_end_date",
         pd.region,
         pd.poc_type,
         pd.department_name,
         pd.description,
         pd.tag,
-        pe.actual_start_date
+        pe.actual_start_date::text as "actual_start_date"
       FROM poc_prj_details pd
       LEFT JOIN poc_prj_efforts pe 
         ON pd.poc_prj_id = pe.poc_prj_id
@@ -1608,7 +1619,7 @@ app.get("/poc/getTodayStatus", authenticateToken, async (req, res) => {
           emp_name AS "employeeName",
           emp_id AS "employeeId",
           poc_prj_id AS "usecaseId",
-          poc_date AS "date",
+          poc_date::text AS "date",
           status AS "description",
           status,
           hrs,
@@ -1627,7 +1638,7 @@ app.get("/poc/getTodayStatus", authenticateToken, async (req, res) => {
           emp_name AS "employeeName",
           emp_id AS "employeeId",
           poc_prj_id AS "usecaseId",
-          poc_date AS "date",
+          poc_date::text AS "date",
           status AS "description",
           status,
           hrs,
@@ -1719,7 +1730,7 @@ app.get("/poc/getStatusByDate", authenticateToken, async (req, res) => {
           emp_name AS "employeeName",
           emp_id AS "employeeId",
           poc_prj_id AS "usecaseId",
-          poc_date AS "date",
+          poc_date::text AS "date",
           status AS "description",
           status,
           hrs,
@@ -1738,7 +1749,7 @@ app.get("/poc/getStatusByDate", authenticateToken, async (req, res) => {
           emp_name AS "employeeName",
           emp_id AS "employeeId",
           poc_prj_id AS "usecaseId",
-          poc_date AS "date",
+          poc_date::text AS "date",
           status AS "description",
           status,
           hrs,
@@ -2226,8 +2237,8 @@ app.get("/poc/getReports", authenticateToken, async (req, res) => {
         p.sales_person as "salesPerson",
         p.region,
         p.poc_type,
-        p.start_date,
-        p.excepted_end_date,
+        p.start_date::text as "start_date",
+        p.excepted_end_date::text as "excepted_end_date",
         p.client_name as "companyName",
         p.partner_client_own,
         p.description as usecase,
@@ -2245,8 +2256,8 @@ app.get("/poc/getReports", authenticateToken, async (req, res) => {
         p.remarks as "remark",
         
         -- Effort tracking fields
-        e.actual_start_date as "actualStartDate",
-        e.actual_end_date as "actualEndDate",
+        e.actual_start_date::text as "actualStartDate",
+        e.actual_end_date::text as "actualEndDate",
         e.estimated_efforts as "estimatedEfforts",
         e.approved_by as "approvedBy",
         e.total_efforts as "totalEfforts",
@@ -2299,7 +2310,7 @@ app.post("/poc/api/auth/login", async (req, res) => {
       const salespersonResult = await pool.query(
         `SELECT "Sr No" AS sr_no, salesperson_name, salesperson_email, password
          FROM salesperson_details
-         WHERE salesperson_email = $1`,
+         WHERE salesperson_email = $1 AND status = 'Active'`,
         [username]
       );
 
@@ -2332,8 +2343,14 @@ app.post("/poc/api/auth/login", async (req, res) => {
       department_name: user.department_name
     };
 
-    const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: "1h" });
-    // const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: "1m" });
+    const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: "30m" });
+
+    const refreshToken = jwt.sign(
+      { sr_no: user.sr_no, user_type: userType },
+      REFRESH_TOKEN_SECRET,
+      { expiresIn: "7d" }
+    );
+    res.cookie("refreshToken", refreshToken, REFRESH_COOKIE_OPTIONS);
 
     // ✅ ADD department_name to response
     const userResponse = {
@@ -2352,6 +2369,81 @@ app.post("/poc/api/auth/login", async (req, res) => {
     console.error("Login error:", err);
     res.status(500).json({ message: "Internal server error" });
   }
+});
+
+
+// Issues a fresh short-lived access token from the httpOnly refresh cookie,
+// re-reading the user from the DB so a role/department change or deactivation
+// takes effect on the next refresh instead of being stuck until the refresh
+// token itself expires.
+app.post("/poc/api/auth/refresh", async (req, res) => {
+  const refreshToken = req.cookies?.refreshToken;
+
+  if (!refreshToken) {
+    return res.status(401).json({ message: "No refresh token provided" });
+  }
+
+  let decoded;
+  try {
+    decoded = jwt.verify(refreshToken, REFRESH_TOKEN_SECRET);
+  } catch (err) {
+    res.clearCookie("refreshToken", { path: REFRESH_COOKIE_OPTIONS.path });
+    return res.status(403).json({ message: "Invalid or expired refresh token" });
+  }
+
+  try {
+    const { sr_no, user_type } = decoded;
+    let user = null;
+
+    if (user_type === "employee") {
+      const empResult = await pool.query(
+        `SELECT sr_no, emp_id, emp_name, email_id, role, department_name
+         FROM emp_details
+         WHERE sr_no = $1 AND status = 'Active'`,
+        [sr_no]
+      );
+      user = empResult.rows[0] || null;
+    } else if (user_type === "salesperson") {
+      const salespersonResult = await pool.query(
+        `SELECT "Sr No" AS sr_no, salesperson_name, salesperson_email
+         FROM salesperson_details
+         WHERE "Sr No" = $1 AND status = 'Active'`,
+        [sr_no]
+      );
+      if (salespersonResult.rows.length > 0) {
+        user = salespersonResult.rows[0];
+        user.emp_id = "AE00";
+        user.emp_name = user.salesperson_name;
+        user.role = 0;
+        user.department_name = "SALES";
+      }
+    }
+
+    if (!user) {
+      res.clearCookie("refreshToken", { path: REFRESH_COOKIE_OPTIONS.path });
+      return res.status(403).json({ message: "User no longer active" });
+    }
+
+    const tokenPayload = {
+      sr_no: user.sr_no,
+      user_type,
+      emp_id: user.emp_id,
+      emp_name: user.emp_name,
+      role: user.role,
+      department_name: user.department_name
+    };
+
+    const newAccessToken = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: "30m" });
+    res.json({ token: newAccessToken });
+  } catch (err) {
+    console.error("Error refreshing token:", err);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+app.post("/poc/api/auth/logout", (req, res) => {
+  res.clearCookie("refreshToken", { path: REFRESH_COOKIE_OPTIONS.path });
+  res.json({ message: "Logged out successfully" });
 });
 
 
@@ -2394,7 +2486,7 @@ app.post("/poc/api/auth/change-password", async (req, res) => {
       const salespersonResult = await pool.query(
         `SELECT "Sr No" AS sr_no, salesperson_name, salesperson_email, password
          FROM salesperson_details
-         WHERE salesperson_email = $1`,
+         WHERE salesperson_email = $1 AND status = 'Active'`,
         [username]
       );
 
@@ -2745,9 +2837,10 @@ app.get("/poc/getAllAssignTo", authenticateToken, async (req, res) => {
 app.get("/poc/getAllSalesPerson", authenticateToken, async (req, res) => {
   try {
     const result = await pool.query(`
-        SELECT salesperson_name, salesperson_email         
+        SELECT salesperson_name, salesperson_email
         FROM public.salesperson_details
-        where salesperson_email not in ('sachin.deshpande@automationedge.com', 'snehadeep.paul@automationedge.com');
+        where salesperson_email not in ('sachin.deshpande@automationedge.com', 'snehadeep.paul@automationedge.com')
+        and status = 'Active';
       `);
 
     const salesPersons = result.rows.map(row => ({
@@ -4924,10 +5017,10 @@ app.get("/poc/sc/all", authenticateToken, async (req, res) => {
         p.region,
         p.country,
         p.status,
-        p.start_date            AS "startDate",
-        p.excepted_end_date     AS "endDate",
-        p.actual_start_date     AS "actualStartDate",
-        p.actual_end_date       AS "actualEndDate",
+        p.start_date::text            AS "startDate",
+        p.excepted_end_date::text     AS "endDate",
+        p.actual_start_date::text     AS "actualStartDate",
+        p.actual_end_date::text       AS "actualEndDate",
         p.poc_type              AS "pocType",
         p.description,
         p.spoc_email_address    AS "spocEmail",
@@ -4945,25 +5038,28 @@ app.get("/poc/sc/all", authenticateToken, async (req, res) => {
         p.call_type             AS "callType",
         p.logo_win              AS "logoWin",
         p.hs_link               AS "hsLink",
-        p.rfp_date              AS "rfpDate",
+        p.rfp_date::text        AS "rfpDate",
         p.client_new_existing   AS "clientNewExisting",
 
-        COALESCE((
-          SELECT SUM(
-            CASE 
-              WHEN hrs ~ '^[0-9]+:[0-9]+$' 
+        COALESCE(worked_hours.total_hours, 0) AS "totalWorkedHours"
+
+      FROM public.poc_prj_sales_details p
+      LEFT JOIN (
+        SELECT
+          poc_prj_id,
+          SUM(
+            CASE
+              WHEN hrs ~ '^[0-9]+:[0-9]+$'
                 THEN split_part(hrs, ':', 1)::int
                    + split_part(hrs, ':', 2)::int / 60.0
               WHEN hrs ~ '^[0-9]+$'
                 THEN hrs::int
               ELSE 0
             END
-          )
-          FROM public.daily_poc_prj_status d 
-          WHERE d.poc_prj_id = p.poc_prj_id::text
-        ), 0) AS "totalWorkedHours"
-
-      FROM public.poc_prj_sales_details p
+          ) AS total_hours
+        FROM public.daily_poc_prj_status
+        GROUP BY poc_prj_id
+      ) worked_hours ON worked_hours.poc_prj_id = p.poc_prj_id::text
       WHERE (
         $2 IN ('ADMIN', 'Department Admin')
         OR $3 = true  -- all_sales_access permission
@@ -5073,7 +5169,8 @@ app.post("/poc/sc/savepocprjid", authenticateToken, async (req, res) => {
       hsLink,
       rfpDate,
       clientNewExisting,
-      country
+      country,
+      status
     } = req.body;
 
     console.log("Incoming payload:", req.body);
@@ -5155,7 +5252,7 @@ app.post("/poc/sc/savepocprjid", authenticateToken, async (req, res) => {
       partner_client_own,    // $3
       sales_person,          // $4
       region,                // $5
-      "Draft",               // $6
+      status || "Draft",     // $6
       start_date,            // $7
       excepted_end_date,     // $8
       actual_start_date,     // $9
@@ -5550,8 +5647,8 @@ app.get("/poc/sc/getUsecases", authenticateToken, async (req, res) => {
         region,
         country,
         status,
-        start_date            AS "startDate",
-        excepted_end_date     AS "endDate",
+        start_date::text      AS "startDate",
+        excepted_end_date::text AS "endDate",
         poc_type              AS "pocType",
         description,
         spoc_email_address    AS "spocEmail",
@@ -5812,7 +5909,7 @@ app.get("/poc/sc/getStatusByDate", authenticateToken, async (req, res) => {
           emp_name AS "employeeName",
           emp_id AS "employeeId",
           poc_prj_id AS "usecaseId",
-          poc_date AS "date",
+          poc_date::text AS "date",
           status AS "description",
           status,
           hrs,
@@ -5830,7 +5927,7 @@ app.get("/poc/sc/getStatusByDate", authenticateToken, async (req, res) => {
           emp_name AS "employeeName",
           emp_id AS "employeeId",
           poc_prj_id AS "usecaseId",
-          poc_date AS "date",
+          poc_date::text AS "date",
           status AS "description",
           status,
           hrs,
