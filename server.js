@@ -3708,7 +3708,7 @@ app.get('/poc/getCreatedBy', authenticateToken, async (req, res) => {
 
 // Email recipients
 const manager_mail_id = process.env.LEAVE_MANAGER_EMAIL;
-const pcs_row_mail_id = process.env.LEAVE_CC_EMAIL;
+// LEAVE_CC_EMAIL is no longer used — CC recipients are fetched dynamically from DB (active PCS ROW employees)
 
 // Parses a date string in either DD-MM-YYYY or YYYY-MM-DD format
 const parseLeaveDate = (dateStr) => {
@@ -4806,9 +4806,15 @@ app.delete('/poc/leave/delete/:id', authenticateToken, async (req, res) => {
 // Helper function to send email
 const sendRevokeEmail = async (leaveDetails, revokerId, revokeMessage) => {
   try {
-    // Parse recipients
+    // Parse TO recipients
     const toRecipients = manager_mail_id.split(',').map(email => email.trim());
-    const ccRecipients = pcs_row_mail_id.split(',').map(email => email.trim());
+
+    // Dynamically fetch CC recipients: all active PCS ROW employees
+    const pcsRowResult = await pool.query(
+      `SELECT email_id FROM emp_details WHERE status = 'Active' AND department_name = 'PCS ROW' AND email_id IS NOT NULL AND email_id <> ''`
+    );
+    const dynamicCcEmails = pcsRowResult.rows.map(r => r.email_id).join(',');
+    const ccRecipients = dynamicCcEmails.split(',').map(email => email.trim()).filter(Boolean);
 
     // Helper function to parse dates in multiple formats
     const parseDate = (dateStr) => {
@@ -4906,7 +4912,7 @@ Note: This leave was revoked by User ID: ${revokerId}
     const mailOptions = {
       from: `"POC Bot" <${emailConfig.auth.user}>`,
       to: manager_mail_id,
-      cc: pcs_row_mail_id,
+      cc: dynamicCcEmails,
       subject: `Request to Revoke Leave Application - ${leaveDetails.emp_name}`,
       text: emailBody,
       html: `
