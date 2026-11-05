@@ -86,9 +86,8 @@ const emailConfig = {
 // Recipients from environment variable (comma-separated)
 const POC_RECIPIENTS = process.env.POC_NOTIFICATION_RECIPIENTS;
 
-// This recipients list is for Usecase code creation notifications
-// Recipients from environment variable (comma-separated)
-const USECASE_RECIPIENTS = process.env.USECASE_NOTIFICATION_RECIPIENTS;
+// CC for Usecase code creation notifications (comma-separated, configurable via .env)
+const USECASE_CC = process.env.USECASE_NOTIFICATION_CC;
 
 
 // Authentication middleware
@@ -3034,6 +3033,16 @@ const sendPOCNotificationEmail = async (pocData) => {
       : '');
 
   try {
+    // Dynamically fetch email addresses of all active PCS ROW employees
+    const empResult = await pool.query(
+      `SELECT email_id FROM emp_details WHERE status = 'Active' AND department_name = 'PCS ROW' AND email_id IS NOT NULL AND email_id <> ''`
+    );
+    const dynamicRecipients = empResult.rows.map(r => r.email_id).join(',');
+
+    if (!dynamicRecipients) {
+      console.warn('No active PCS ROW employees found for Usecase email notification.');
+    }
+
     const transporter = nodemailer.createTransport(emailConfig);
 
     const emailSubject = `New POC ID Created: ${pocData.pocPrjId}`;
@@ -3106,7 +3115,8 @@ const sendPOCNotificationEmail = async (pocData) => {
 
     const mailOptions = {
       from: emailConfig.auth.user,
-      to: USECASE_RECIPIENTS,
+      to: dynamicRecipients,
+      ...(USECASE_CC ? { cc: USECASE_CC } : {}),
       subject: emailSubject,
       html: emailHtml,
       text: `Hi Team,\n\nGiven POC ID already exists, so BOT has created new POC ID as below:\n\nPOC ID: ${pocData.pocPrjId}\nPOC Name: ${pocData.pocName}\nName of Partner/Client/Internal: ${clientPartnerDisplay}\nAssigned To: ${pocData.assignedTo}\nSalesperson: ${pocData.salesPerson}\n\nThanks & Regards,\nPOC BOT\n------------------------------------------------------------------\nThis is BOT generated email, please do not reply`
