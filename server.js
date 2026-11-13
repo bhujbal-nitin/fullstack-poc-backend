@@ -2593,6 +2593,7 @@ app.get("/poc/all", authenticateToken, async (req, res) => {
         p.start_date::text as "startDate",
         p.excepted_end_date::text as "endDate",
         p.poc_type as "pocType",
+        p.priority,
         p.description,
         p.department_name as "department",
         p.converted_date::text as "convertedDate",
@@ -2703,7 +2704,7 @@ app.put("/poc/update/:id", authenticateToken, async (req, res) => {
     const { id } = req.params;
     let {
       pocName, entityName, entityType, salesPerson, region, isBillable,
-      status, startDate, endDate, pocType, description, spocEmail, spocDesignation, department,
+      status, startDate, endDate, pocType, priority, description, spocEmail, spocDesignation, department,
       convertedDate,
       tags, assignedTo, remark, actualStartDate, actualEndDate,
       estimatedEfforts, approvedBy, totalEfforts, varianceDays, partnerName
@@ -2736,15 +2737,16 @@ app.put("/poc/update/:id", authenticateToken, async (req, res) => {
         converted_date = $15,
         tag = $16,
         assigned_to = $17,
-        remarks = $18
-      WHERE poc_prj_id::text = $19
+        remarks = $18,
+        priority = $19
+      WHERE poc_prj_id::text = $20
       RETURNING *
     `;
 
     const pocDetailsValues = [
       pocName, entityName, entityType, salesPerson, region, billableValue, // ✅ Yes/No saved
       status, startDate, endDate, pocType, description, spocEmail, spocDesignation, department, convertedDate,
-      tags, assignedTo, remark, id
+      tags, assignedTo, remark, priority || null, id
     ];
 
     const pocDetailsResult = await pool.query(pocDetailsQuery, pocDetailsValues);
@@ -3144,6 +3146,7 @@ app.post("/poc/savepocprjid", authenticateToken, async (req, res) => {
       entityName,      // company name
       partnerName,     // goes to efforts table
       pocType,
+      priority,
       region,
       salesPerson,
       spocEmail,
@@ -3174,11 +3177,13 @@ app.post("/poc/savepocprjid", authenticateToken, async (req, res) => {
     sales_person, description, assigned_to, start_date,
     excepted_end_date, remarks, created_by, region, poc_type,
     is_billable, tag, spoc_email_address, spoc_designation, department_name, converted_date,
+    priority,
     status  -- Add status column
   )
   VALUES (
     $1,$2,$3,$4,$5,$6,$7,$8,$9,
     $10,$11,$12,$13,$14,$15,$16,$17,$18,$19,
+    $20,
     'Draft'  -- Set default status as 'Draft'
   )
   RETURNING *;
@@ -3203,7 +3208,8 @@ app.post("/poc/savepocprjid", authenticateToken, async (req, res) => {
       spocEmail,
       spocDesignation,
       department,
-      convertedDate
+      convertedDate,
+      priority || null
     ]);
 
     // 🔹 Insert into poc_prj_efforts
@@ -3268,6 +3274,7 @@ app.get("/poc/:id", authenticateToken, async (req, res) => {
           p.start_date::text as "startDate",
           p.excepted_end_date::text as "endDate",
           p.poc_type as "pocType",
+          p.priority,
           p.description,
           p.department_name as "department",
           p.converted_date::text as "convertedDate",
