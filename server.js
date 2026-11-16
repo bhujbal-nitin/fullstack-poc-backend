@@ -4001,8 +4001,11 @@ app.post('/poc/leave/apply', authenticateToken, async (req, res) => {
 // Function to send leave application email
 const sendLeaveApplyEmail = async (leaveDetails) => {
   try {
-    // Parse recipients (use same as revoke email)
-    const toRecipients = POC_RECIPIENTS.split(',').map(email => email.trim());
+    // Dynamically fetch CC recipients: all active PCS ROW employees (same as revoke email)
+    const pcsRowResult = await pool.query(
+      `SELECT email_id FROM emp_details WHERE status = 'Active' AND department_name = 'PCS ROW' AND email_id IS NOT NULL AND email_id <> ''`
+    );
+    const dynamicCcEmails = pcsRowResult.rows.map(r => r.email_id).join(',');
 
     // Format dates
     const formatDate = (dateString) => {
@@ -4057,7 +4060,7 @@ POC Bot
     const mailOptions = {
       from: `"POC Bot" <${emailConfig.auth.user}>`,
       to: manager_mail_id,
-      cc: pcs_row_mail_id, // CC the actual employee email
+      cc: dynamicCcEmails,
       subject: `Leave Application - ${leaveDetails.emp_name}`,
       text: emailBody,
       html: `
@@ -4497,9 +4500,11 @@ const formatDays = (days, halfDay = false, halfDayType = 'first') => {
 // Function to send leave update email - Updated for half-day support
 const sendLeaveUpdateEmail = async (originalLeave, updatedLeave, updatedByName) => {
   try {
-    // Parse recipients (use same as other emails)
-    const toRecipients = manager_mail_id.split(',').map(email => email.trim());
-    const ccRecipients = pcs_row_mail_id.split(',').map(email => email.trim());
+    // Dynamically fetch CC recipients: all active PCS ROW employees (same as revoke email)
+    const pcsRowResult = await pool.query(
+      `SELECT email_id FROM emp_details WHERE status = 'Active' AND department_name = 'PCS ROW' AND email_id IS NOT NULL AND email_id <> ''`
+    );
+    const dynamicCcEmails = pcsRowResult.rows.map(r => r.email_id).join(',');
 
     // Helper function to parse dates in multiple formats
     const parseDate = (dateStr) => {
@@ -4590,7 +4595,7 @@ Thank you for your support.
     const mailOptions = {
       from: `"POC Bot" < ${emailConfig.auth.user}> `,
       to: manager_mail_id,
-      cc: pcs_row_mail_id,
+      cc: dynamicCcEmails,
       subject: `Request to Update Applied Leave - ${originalLeave.emp_name || updatedLeave.emp_name || 'N/A'}`,
       text: emailBody,
       html: `
